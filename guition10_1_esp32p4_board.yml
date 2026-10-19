@@ -1,0 +1,4126 @@
+# =============================================================================
+# Guition JC8012P4A1 (ESP32-P4 10.1"): full SIP JPEG videophone (LVGL)
+# Profile: FULL / single-mic AFE / P4 landscape SIP JPEG videophone
+# Derived from n-IA-hane/esphome-intercom
+#   yamls/full-experience/single-bus/waveshare-p4-touch-full-afe-landscape-videophone-jpeg.yaml
+# Board-specific changes are marked [GUITION].
+# Composition: Preset + component bindings + common UI projection + p4_full_video_jpeg package.
+# Runtime facts: native media/VoIP/Wi-Fi/mute listeners; shared VA/MWW callbacks.
+# YAML keeps user controls, board wiring and presentation hooks.
+# Support: https://github.com/sponsors/n-IA-hane
+# =============================================================================
+#
+# CAPTURE: ES8311 stereo RX; one microphone and the ES8311 internal DAC reference.
+# [ES8311 RX left: MIC1 microphone] ──────┐
+# [ES8311 RX right: DAC feedback REF] ────┤
+#                                         ▼
+#                          [audio_stack: 48 → 16 kHz]
+#                                         │
+#                                         ▼
+#                    [afe_processor: AEC + NS + AGC (1 mic)]
+#                                         │
+#                                         ▼
+#                                    [mic_afe] ──┬─► VA
+#                                                ├─► MWW (barge-in)
+#                                                └─► VoIP TX
+# [GUITION] No ES7210 is fitted, so there is no TDM reference. The ES8311
+# loops its own DAC output into the right ADC channel (no_dac_ref: false),
+# the same single-codec layout the Spotpear Ball v2 profile uses.
+#
+# PLAYBACK: speaker_media_player owns the media + announcement pipelines.
+#      [HTTP / Sendspin]          [VA TTS / HTTP / files]              [VoIP RX]
+#              │                             │                             │
+#              ▼                             ▼                             │
+#       [media_pipeline]          [announcement_pipeline]                  │
+#              │                             │                             │
+#              ▼                             ▼                             ▼
+#    [media_speaker_input]          [tts_speaker_input]           [voip_speaker_input]
+#          resampler                     resampler                     resampler
+#              │                             │                             │
+#              ▼                             ▼                             ▼
+#     [media_mixer_input]            [tts_mixer_input]             [voip_mixer_input]
+#              │                             │                             │
+#              └─────────────────────────────┼─────────────────────────────┘
+#                                            ▼
+#                             ┌─────────────────────────────┐
+#                             │   audio_mixer: 48 kHz mono  │
+#                             └──────────────┬──────────────┘
+#                                            ▼
+#                                       [hw_speaker]
+#                                            │
+#                                            ▼
+#                    [audio_stack I2S TX → ES8311 → NS4150B → speaker]
+#
+# The three *_speaker_input nodes are resamplers; *_mixer_input are mixer ports.
+# TTS, ringtone and timer files share the announcement pipeline, not VoIP RX.
+# Reference labels above describe configured signal sources, not extra I2S buses.
+#
+# BOARD, WIRING AND USER CONTROLS
+# -------------------------------
+#
+# Hardware [GUITION JC8012P4A1]:
+#   - ESP32-P4 RISC-V dual-core (16MB Flash W25Q128, 32MB PSRAM hex)
+#   - WiFi via ESP32-C6 co-processor (SDIO, esp32_hosted)
+#   - MIPI DSI display: 10.1" 800x1280 (JD9365), landscape UI
+#   - GSL3680 capacitive touch (ESPHome gsl3670 driver, I2C 0x40)
+#   - ES8311 codec: DAC (speaker) + ADC (single analog mic), I2C 0x18
+#   - NS4150 mono Class-D speaker amp, PA_CTRL GPIO20 (10K pull-down)
+#   - OV02C10 2MP MIPI-CSI camera (SCCB 0x36), RX8025T RTC (0x32)
+#   - BOOT button (GPIO35, SW3 "BOOTMODE")
+#
+# Pin Map:
+#   I2S:   MCLK=GPIO13 BCLK=GPIO12 LRCLK=GPIO10 DIN(ASDOUT)=GPIO11 DOUT(DSDIN)=GPIO9
+#   I2C:   SDA=GPIO7 SCL=GPIO8 (ES8311@0x18, RTC@0x32, OV02C10@0x36, GSL3680@0x40)
+#   Touch: INT=GPIO21 RST=GPIO22
+#   Display: RST=GPIO27, backlight PWM GPIO23 (LCD_PWM), MIPI PHY = LDO ch3 2.5V
+#   Speaker amp: GPIO20
+#   C6 SDIO: RST=GPIO54 CMD=GPIO19 CLK=GPIO18 D0-D3=GPIO14-17
+#   Logs: USB Serial/JTAG (UART0 GPIO37/38 is on the header)
+#
+# Display panel: model JC8012P4A1-V2 (70 MHz / 1.5 Gbps). If the screen stays
+# black or shows noise, try model JC8012P4A1 (original panel, 60 MHz / 1 Gbps).
+#
+# Touch UI:
+#   Main page:      weather, VoIP and voice assistant dashboard
+#   Settings page:  swipe up/down, compact landscape controls
+#   BOOT button:    short press starts/stops VA, long press toggles mic mute
+#
+
+# =============================================================================
+# PROJECT SETUP
+# =============================================================================
+
+substitutions:
+  runtime_controller_debug: "false"
+  name: guition-p4-101
+  friendly_name: Guition P4 10.1
+
+  mic_id: mic_afe
+  # Toggled by scripts/yaml_paths.sh between local (../../../...) and remote
+  # release mode.
+  ext_components_source: "github://n-IA-hane/esphome-intercom@main"
+  voip_stack_components_source: "github://n-IA-hane/esphome-voip-stack@main"
+  audio_stack_components_source: "github://n-IA-hane/esphome-audio-stack@main"
+  runtime_controller_components_source: "github://n-IA-hane/esphome-runtime-controller@main"
+  assets_base: "https://github.com/n-IA-hane/esphome-intercom/raw/main/"
+
+  # Logical LVGL dimensions after software rotation. Runtime layout still reads
+  # the active LVGL resolution so the main dashboard can be reused on nearby
+  # landscape panels without rewriting every absolute coordinate.
+  display_width: "1280"
+  display_height: "800"
+
+  # AI avatar folder (${assets_base}assets/images/assistant/<ai_avatar>/)
+  ai_avatar: f_off
+  # [GUITION] Avatar frame size. 400x400 (Waveshare default) does not fit the
+  # 16 MB flash OTA layout; keep at 256x256 or below.
+  ai_avatar_size: 240x240
+  sendspin_artwork_resize: 400x400
+
+  # [GUITION] ES8311 ADC PGA sets hardware gain; this is the post-AFE user trim.
+  mic_gain_min: "-20"
+  mic_gain_max: "30"
+
+  # Home Assistant weather entity used by the P4 dashboard page.
+  weather_entity_id: weather.home   # [GUITION] change to your HA weather entity
+
+  voice_assist_idle_phase_id: "1"
+  voice_assist_listening_phase_id: "2"
+  voice_assist_thinking_phase_id: "3"
+  voice_assist_replying_phase_id: "4"
+  voice_assist_not_ready_phase_id: "10"
+  voice_assist_error_phase_id: "11"
+  voice_assist_muted_phase_id: "12"
+
+  # Settings page widths for the 1280x800 landscape display.
+  settings_row_width: "1180"
+  settings_wide_width: "1180"
+  settings_mid_width: "560"
+  settings_control_width: "520"
+  settings_row_height: "56"
+  settings_narrow_width: "360"
+  settings_dropdown_width: "340"
+  settings_pad_row: "16"
+  settings_slider_height: "20"
+  settings_switch_width: "70"
+  settings_switch_height: "36"
+  settings_label_font: font_body
+
+  # [GUITION] Single-mic AFE: AEC stays on; NS/AGC are runtime switches.
+  afe_aec_restore_mode: ALWAYS_ON
+
+  # [GUITION] Outgoing SIP video. The OV02C10 runs 1920x1080; the camera
+  # component only downscales in exact 1/16 steps, so 960x540 (1/2) is used
+  # instead of the Waveshare 800x800 square. Overrides p4_full_video_jpeg.
+  p4_sip_jpeg_width: "960"
+  p4_sip_jpeg_height: "540"
+  p4_sip_jpeg_fps: "10"
+
+  # ---------------------------------------------------------------------------
+  # Pinout: ESP32-C6 hosted Wi-Fi SDIO link
+  # ---------------------------------------------------------------------------
+  hosted_reset_pin: GPIO54
+  hosted_cmd_pin: GPIO19
+  hosted_clk_pin: GPIO18
+  hosted_d0_pin: GPIO14
+  hosted_d1_pin: GPIO15
+  hosted_d2_pin: GPIO16
+  hosted_d3_pin: GPIO17
+
+  # ---------------------------------------------------------------------------
+  # Pinout: shared codec/touch I2C bus
+  # ---------------------------------------------------------------------------
+  codec_i2c_sda_pin: GPIO7
+  codec_i2c_scl_pin: GPIO8
+
+  # ---------------------------------------------------------------------------
+  # Pinout: ES8311 I2S bus (MCLK/BCLK/LRCK shared, ASDOUT -> DIN, DSDIN <- DOUT)
+  # ---------------------------------------------------------------------------
+  i2s_mclk_pin: GPIO13
+  i2s_bclk_pin: GPIO12
+  i2s_lrclk_pin: GPIO10
+  i2s_din_pin: GPIO11
+  i2s_dout_pin: GPIO9
+
+  # ---------------------------------------------------------------------------
+  # Pinout: display, backlight, speaker amp and physical button
+  # ---------------------------------------------------------------------------
+  display_reset_pin: "27"
+  display_backlight_pin: GPIO23   # [GUITION] LCD_PWM -> MP3202 EN
+  speaker_enable_pin: GPIO20      # [GUITION] PA_CTRL -> NS4150 CTRL (high = on, unverified)
+  boot_button_pin: GPIO35         # [GUITION] SW3 BOOTMODE, 10K pull-up
+
+# Shared packages: P4 base/hosted Wi-Fi, full VA/VoIP runtime, runtime
+# controller, phonebook sync, ESP AFE controls, LVGL dashboard and media assets.
+
+packages:
+  sendspin_source: github://n-IA-hane/esphome-intercom/packages/media_player/sendspin.yaml@main
+  playback_compat: github://n-IA-hane/esphome-intercom/packages/media_player/playback_compat.yaml@main
+  http_media_codecs: github://n-IA-hane/esphome-intercom/packages/audio/http_media_codecs.yaml@main
+  p4_base: github://n-IA-hane/esphome-intercom/packages/platform/esp32p4_base.yaml@main
+  p4_c6_sdio: github://n-IA-hane/esphome-intercom/packages/board/esp32p4_c6_sdio.yaml@main
+  p4_diagnostics: github://n-IA-hane/esphome-intercom/packages/diagnostics/native_no_wifi_signal.yaml@main
+  full_voice_voip_runtime: github://n-IA-hane/esphome-intercom/packages/presets/full_voice_voip_runtime.yaml@main
+  runtime_ui_projection: github://n-IA-hane/esphome-intercom/packages/runtime/lvgl_ui_projection.yaml@main
+  timer_alarm_orchestration: github://n-IA-hane/esphome-intercom/packages/runtime/timer_alarm_orchestration.yaml@main
+  runtime_controller: github://n-IA-hane/esphome-runtime-controller/packages/runtime_controller/full_controller_no_led.yaml@main
+  voice_assistant_runtime_controls: github://n-IA-hane/esphome-intercom/packages/voice_assistant/runtime_controls.yaml@main
+  call_settings: github://n-IA-hane/esphome-intercom/packages/voip/call_settings.yaml@main
+  ha_api: github://n-IA-hane/esphome-intercom/packages/runtime/ha_connectivity.yaml@main
+  voice_assistant_local_commands: github://n-IA-hane/esphome-intercom/packages/voice_assistant/local_commands.yaml@main
+  voip_transport: github://n-IA-hane/esphome-intercom/packages/voip/transport.yaml@main
+  p4_full_video_jpeg: github://n-IA-hane/esphome-intercom/packages/voip/p4_full_video_jpeg.yaml@main
+  ota_maintenance: github://n-IA-hane/esphome-intercom/packages/ota/full_audio_lvgl_maintenance.yaml@main
+  # [GUITION] single mic: adds NS/AGC switches, drops dual-mic SE profile.
+  afe_entities: github://n-IA-hane/esphome-intercom/packages/esp_afe/single_mic_entities.yaml@main
+  audio_stack_controls: github://n-IA-hane/esphome-intercom/packages/esp_audio_stack/controls.yaml@main
+  speaker_power: github://n-IA-hane/esphome-intercom/packages/esp_audio_stack/speaker_power_output.yaml@main
+  flac_codecs_psram: github://n-IA-hane/esphome-intercom/packages/audio/flac_codecs_psram.yaml@main
+  sendspin_artwork: github://n-IA-hane/esphome-intercom/packages/media_player/sendspin_artwork.yaml@main
+  lvgl_p4_ppa: github://n-IA-hane/esphome-intercom/packages/lvgl/p4_ppa.yaml@main
+  p4_va_cleanup: github://n-IA-hane/esphome-intercom/packages/lvgl/p4_va_cleanup.yaml@main
+  # No carousel (lvgl_settings_navigation) on P4: the landscape display holds
+  # all settings in one scrollable dashboard page.
+  # _boot package provides the settings_p4_sync_widgets script invoked from on_boot.
+  lvgl_settings_p4_boot: github://n-IA-hane/esphome-intercom/packages/lvgl/lvgl_settings_p4_unified_boot.yaml@main
+
+# =============================================================================
+# BOARD AND MEMORY
+# =============================================================================
+
+# Device identity and boot choreography. The early boot step restores the
+# selected contact label; the late step brings up backlight, LVGL and wake word
+# after restored switches/entities have settled.
+
+esphome:
+  min_version: 2026.9.0
+  name: ${name}
+  friendly_name: ${friendly_name}
+  # This full native-camera profile has a different generated component graph
+  # from both SIP videophone codec profiles.
+  build_path: .esphome/build/guition-p4-full-afe-landscape
+  on_boot:
+    - priority: 200
+      then:
+        - lambda: id(peer_name) = id(phone).get_current_destination();
+    - priority: -100
+      then:
+        - logger.log: "Boot: late init start"
+        - delay: 500ms
+        - output.set_level:
+            id: backlight_pwm
+            level: 100%
+        - lvgl.page.show: initializing_page
+        - script.execute: compute_main_layout
+        - script.execute: draw_display
+        # One-shot sync of LVGL settings widgets from current entity state
+        # (switches restored via restore_mode are settled at this priority).
+        - script.execute: settings_p4_sync_widgets
+        - micro_wake_word.stop:
+        - delay: 1s
+        - script.execute: start_mww_when_ready
+
+# External PSRAM used by LVGL assets, media buffers and selected component task
+# stacks. The P4 board exposes hex PSRAM at high speed.
+
+psram:
+  mode: hex
+  speed: 200MHz
+
+# MIPI DSI PHY requires 2.5V from internal LDO channel 3
+
+esp_ldo:
+  - channel: 3
+    voltage: 2.5V
+
+# =============================================================================
+# EXTERNAL COMPONENTS
+# =============================================================================
+
+# Allow interrupts between large video cache-writeback chunks.
+esp32:
+  flash_size: 16MB
+  partitions: partitions16mb.csv
+  framework:
+    sdkconfig_options:
+      CONFIG_ESP_MM_CACHE_MSYNC_C2M_CHUNKED_OPS: "y"
+    advanced:
+      execute_from_psram: true
+      compiler_optimization: "PERF"
+      
+external_components:
+  - source: ${voip_stack_components_source}
+    components: [voip_stack]
+  - source: ${ext_components_source}
+    components: [speaker, voice_assistant, mipi_dsi]
+  - source: github://Psix-anp/esphome-esp-video-camera@main
+    components: [esp_video_camera]
+  # [GUITION] OV02C10 sensor driver (auto-detected by esp_video_camera).
+  - source: github://chickymonkey/camera_OV02C10_component@main
+    components: [ov02c10]
+    refresh: 1d
+  - source: ${runtime_controller_components_source}
+    components: [runtime_controller]
+  - source: ${audio_stack_components_source}
+    components: [esp_audio_stack, esp_afe]
+
+# =============================================================================
+# CONNECTIVITY
+# =============================================================================
+
+# Conservative lwIP profile for ESP32-P4 hosted Wi-Fi. Display, AFE and VoIP are
+# more sensitive to internal DMA heap pressure than to peak network throughput.
+
+network:
+  # ESPHome's high-performance preset uses large lwIP windows/mailboxes and
+  # Wi-Fi buffer counts. On hosted P4+C6 the bottleneck is INTERNAL|DMA
+  # headroom, not iperf throughput, so keep the network profile conservative.
+  enable_high_performance: false
+
+# WiFi via ESP32-C6 co-processor (SDIO)
+# Known stability issues: see https://github.com/esphome/esphome/issues/10956
+esp32_hosted:
+  variant: ESP32C6
+  use_psram: true
+  reset_pin: ${hosted_reset_pin}
+  cmd_pin: ${hosted_cmd_pin}
+  clk_pin: ${hosted_clk_pin}
+  d0_pin: ${hosted_d0_pin}
+  d1_pin: ${hosted_d1_pin}
+  d2_pin: ${hosted_d2_pin}
+  d3_pin: ${hosted_d3_pin}
+  active_high: true
+
+# Network link for HA API, VoIP signaling/RTP and media streams. Power save is
+# disabled because calls and dashboard state updates are latency-sensitive.
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  power_save_mode: none
+  reboot_timeout: 10min
+  fast_connect: false
+  on_connect:
+    - logger.log: "WiFi connected"
+    - script.execute: draw_display
+  on_disconnect:
+    - logger.log: "WiFi disconnected"
+    - script.execute: draw_display
+
+# Home Assistant native API. It carries entity state, service actions and the
+# central phonebook updates used by VoIP Stack.
+
+api:
+  custom_services: true
+  on_client_connected:
+    - script.execute: set_idle_or_mute_phase
+    - script.execute: draw_display
+    - delay: 5s
+    - script.execute: fetch_forecast
+
+# UART logger. Keep VoIP domains visible at INFO; noisy entity/component domains
+# stay WARN unless the board is being actively debugged.
+
+logger:
+  hardware_uart: USB_SERIAL_JTAG   # [GUITION] USB-C is the P4's native USB
+  level: INFO
+  logs:
+    voip_stack: INFO
+    voip_stack.fsm: INFO
+    voip_stack.tcp: INFO
+    voip_stack.udp: INFO
+    voip_stack.audio: INFO
+    voip_stack.settings: INFO
+    sensor: WARN
+    text_sensor: WARN
+    binary_sensor: WARN
+    switch: WARN
+    number: WARN
+    button: WARN
+    api: WARN
+    api.connection: WARN
+    component: WARN
+
+# SNTP clock used by the dashboard page and runtime labels.
+
+time:
+  - platform: sntp
+    id: my_time
+    timezone: Australia/Sydney
+    servers:
+      - 0.pool.ntp.org
+
+# =============================================================================
+# BUSES
+# =============================================================================
+
+i2c:
+  - id: internal_i2c
+    sda: ${codec_i2c_sda_pin}
+    scl: ${codec_i2c_scl_pin}
+    # ESPHome defaults this bus to 50 kHz; the codec/touch bus supports normal
+    # fast-mode I2C, so keep init/control traffic at 400 kHz.
+    frequency: 400kHz
+    scan: false
+
+# The full profile shares one native JPEG camera between Home Assistant and the
+# compile-gated SIP/JPEG source. Remote video uses the P4 JPEG decoder and PPA
+# direct display path supplied by p4_full_video_jpeg.
+# [GUITION] OV02C10 on the 15-pin CSI connector: 1-lane 1920x1080 RAW10 mode,
+# no XCLK/reset/power-down lines (CSI_IO0 is pulled up, CSI_IO1 is unused).
+ov02c10:
+  lanes: 1
+
+esp_video_camera:
+  id: p4_camera
+  name: "P4 Camera"
+  i2c_id: internal_i2c
+  device: jpeg
+  # [GUITION] Exact 1/2 PPA downscale of the 1920x1080 sensor mode. Must match
+  # p4_sip_jpeg_width/height in substitutions.
+  resolution: ${p4_sip_jpeg_width}x${p4_sip_jpeg_height}
+  jpeg_quality: 10
+  buffer_count: 2
+  max_framerate: 10
+  enable_xclk: false
+  # [GUITION] Set once you know how the module is mounted. 90/270 swap width and
+  # height, so swap p4_sip_jpeg_width/height too.
+  rotation: 0
+
+# [GUITION] Remote video can now be up to 960 px wide.
+p4_video_renderer:
+  max_decode_width: 960
+  max_decode_height: 960
+
+# =============================================================================
+# OUTPUTS AND LIGHTS
+# =============================================================================
+
+output:
+  - platform: ledc
+    id: backlight_pwm
+    pin: ${display_backlight_pin}
+    inverted: false       # [GUITION] LCD_PWM high = MP3202 enabled
+    frequency: 1000Hz
+
+  - platform: gpio
+    id: speaker_enable
+    pin: ${speaker_enable_pin}
+
+# Display backlight entity backed by the PWM output above.
+
+light:
+  - platform: monochromatic
+    id: display_backlight
+    name: "Display Backlight"
+    output: backlight_pwm
+    restore_mode: ALWAYS_ON
+    default_transition_length: 250ms
+
+# =============================================================================
+# AUDIO PIPELINE
+# =============================================================================
+
+# [GUITION] ES8311 is both DAC and ADC. The single analog microphone is on
+# MIC1P/N. With no_dac_ref: false the codec returns its own DAC output on the
+# right ADC channel, giving a sample-aligned hardware AEC reference (same layout
+# as the Spotpear Ball v2 profile). num_channels: 2 drives DACL for the speaker
+# and DACR for that reference.
+
+esp_audio_stack:
+  # Keep hardware audio on Core 1; the AFE feed task remains on Core 0.
+  task_core: 1
+  # Keep the realtime I2S/AFE bridge stack internal on P4.
+  audio_task_stack_in_psram: false
+  i2s_lrclk_pin: ${i2s_lrclk_pin}
+  i2s_bclk_pin: ${i2s_bclk_pin}
+  i2s_mclk_pin: ${i2s_mclk_pin}
+  i2s_din_pin: ${i2s_din_pin}   # ES8311 ASDOUT (mic + DAC reference)
+  i2s_dout_pin: ${i2s_dout_pin} # ES8311 DSDIN (speaker)
+  sample_rate: 48000
+  output_sample_rate: 16000
+  processor_id: afe_processor
+  audio_effects:
+    rate_cvt_complexity: 3
+    rate_cvt_perf_type: speed
+  num_channels: 2
+  codec:
+    i2c_id: internal_i2c
+    input:
+      type: es8311
+      address: 0x18
+      gain_db: 24.0
+      use_mclk: true
+      no_dac_ref: false
+    output:
+      type: es8311
+      address: 0x18
+      use_mclk: true
+      no_dac_ref: false
+  use_stereo_aec_reference: true
+  reference_channel: right
+  buffers_in_psram: true
+
+esp_afe:
+  id: afe_processor
+  # Keep the asynchronous AFE producer immediately below the audio consumer
+  # (priority 19). At the default priority 5, display/Sendspin work can delay a
+  # complete 64 ms fetch frame and the realtime consumer must publish silence.
+  task_priority: 18
+  feed_task_priority: 18
+  fetch_task_priority: 18
+  # [GUITION] output_prebuffer_frames is only supported with mic_num: 2.
+  type: fd
+  mode: high_perf
+  # [GUITION] One microphone + DAC reference (MR layout).
+  mic_num: 1
+  aec_enabled: true
+  aec_filter_length: 4
+  aec_nlp_level: normal
+  se_enabled: false            # SE/BSS needs two microphones.
+  ns_enabled: true
+  vad_enabled: true            # Keep GMF VAD internals live; HA switch gates runtime behavior.
+  continuous_vad: true         # Keep Voice Detected alive in standby when VAD is enabled.
+  agc_enabled: true            # Single analog mic benefits from AGC; runtime switch.
+  # Keep the complete GMF bridge in internal RAM. These buffers are touched on
+  # every AFE frame, and P4 now has enough contiguous internal heap after the
+  # SDK baseline cleanup. Setting these three flags to true moves about 45-50KB
+  # back to PSRAM on the P4 dual-mic profile, but adds per-frame PSRAM traffic
+  # and was observed to make VoIP TX less stable under full display/audio load.
+  feed_buf_in_psram: false
+  feed_ring_in_psram: false
+  fetch_ring_in_psram: false
+
+# Microphone: publishes AFE-clean PCM frames to VA, wake word and VoIP
+
+microphone:
+  - platform: esp_audio_stack
+    id: mic_afe
+
+# Speaker pipeline: mixes media, TTS and VoIP RX into the hardware speaker
+
+speaker:
+  # Hardware output: writes 48kHz PCM to I2S bus
+  - platform: esp_audio_stack
+    id: hw_speaker
+    sample_rate: 48000
+    bits_per_sample: 16
+    timeout: 1s
+    buffer_duration: 128ms
+
+  # 3-source mixer: media + announcements/ringtone + VoIP
+  - platform: mixer
+    id: audio_mixer
+    output_speaker: hw_speaker
+    num_channels: 1
+    task_stack_in_psram: true
+    source_speakers:
+      - id: media_mixer_input       # Music/radio streams (duckable)
+        timeout: 10s
+        buffer_duration: 100ms
+      - id: tts_mixer_input         # VA announcements and local ringtone
+        timeout: 10s
+        buffer_duration: 100ms
+      - id: voip_mixer_input    # VoIP audio
+        timeout: 10s
+        buffer_duration: 128ms       # VoIP jitter/mixer staging; RTP ptime is negotiated separately.
+
+  # ResamplerSpeakers: convert any input rate to 48kHz before the mixer
+  - platform: resampler
+    id: media_speaker_input              # Music/radio to 48kHz
+    output_speaker: media_mixer_input
+    task_stack_in_psram: true
+
+  - platform: resampler
+    id: tts_speaker_input                # VA TTS to 48kHz
+    output_speaker: tts_mixer_input
+    task_stack_in_psram: true
+
+  - platform: resampler
+    id: voip_speaker_input           # VoIP RX (16kHz) to 48kHz
+    output_speaker: voip_mixer_input
+    task_stack_in_psram: true
+    buffer_duration: 128ms
+
+# =============================================================================
+# MEDIA, ASSIST AND VOIP
+# =============================================================================
+
+# Sendspin media hub used by the full dashboard media experience.
+
+audio_file:
+  - id: timer_finished_sound
+    file: ${assets_base}assets/sounds/timer_finished.flac
+  - id: voip_ringing_sound
+    file: ${assets_base}assets/sounds/ringtone.flac
+
+# Media sources for music, announcements, bundled sounds and Sendspin artwork.
+
+media_source:
+  - platform: audio_http
+    id: media_http_source
+    buffer_size: 65536
+    task_stack_in_psram: true
+  - platform: audio_http
+    id: announcement_http_source
+    buffer_size: 65536
+    task_stack_in_psram: true
+  - platform: audio_file
+    id: announcement_file_source
+    task_stack_in_psram: true
+media_player:
+  - platform: speaker_source
+    name: None
+    id: speaker_media_player
+    internal: false
+    # Keep source/media volume separate from board loudness: `master_volume`
+    # drives the ES8311 DAC, while media_player volume is the speaker/source
+    # software layer. The AEC reference is the ES8311 DAC loopback, so do not
+    # attach audio_dac directly to hw_speaker here.
+    volume_initial: 100%
+    volume_min: 0%
+    volume_max: 100%
+    volume_increment: 5%
+    media_pipeline:
+      num_channels: 1
+      speaker: media_speaker_input
+      sample_rate: 48000
+      format: FLAC
+      sources:
+        - media_http_source
+    announcement_pipeline:
+      num_channels: 1
+      speaker: tts_speaker_input
+      format: FLAC
+      sample_rate: 48000
+      sources:
+        - announcement_http_source
+        - announcement_file_source
+    on_announcement:
+      - if:
+          condition:
+            voip_stack.is_idle:
+          then:
+            - script.execute: backlight_timer
+    on_play:
+      - script.execute: backlight_timer
+    on_pause:
+      - script.execute: backlight_timer
+    on_idle:
+      # media_idle is the reducer's canonical terminal event for both normal
+      # media and announcements (including the VoIP ringtone). The obsolete
+      # announcement_idle name is not part of the runtime-controller contract
+      # and could leave the cached Sendspin media activity stuck on screen.
+      - delay: 200ms
+      - script.execute: backlight_timer
+
+micro_wake_word:
+  id: mww
+  microphone: mic_afe
+  stop_after_detection: false
+  models:
+    - model: alexa
+
+voice_assistant:
+  id: va
+  microphone: mic_afe
+  media_player: speaker_media_player
+  micro_wake_word: mww
+  noise_suppression_level: 0   # AFE does NS locally
+  auto_gain: 0dBFS             # Do not add HA-side AGC on top of the AFE profile
+  # Keep VA playback PCM at unity. Board loudness belongs to ES8311
+  # `master_volume`; digital boost here can clip before the AEC reference path.
+  volume_multiplier: 1.0
+  on_timer_started:
+    - script.execute: update_timer_state
+  on_timer_cancelled:
+    - script.execute: update_timer_state
+  on_timer_updated:
+    - script.execute: update_timer_state
+  on_timer_tick:
+    - script.execute: update_timer_state
+  on_timer_finished:
+    - script.execute: draw_display
+
+voip_stack:
+  use_ha_as_first_contact: true
+  id: phone
+  task_stacks_in_psram: true
+  # The TX/RX audio stacks reserve 24 KiB. H.264, AFE, API and Sendspin cannot
+  # all admit their boot-time internal allocations if those stacks stay in
+  # internal RAM, so keep the compile-time gate explicit for this PSRAM board.
+  # Audio deadline/jitter is qualified at runtime below; do not infer it from
+  # stack placement alone.
+  audio_task_stacks_in_psram: true
+  # Set true to save roughly 5-8KB internal RAM from VoIP-owned staging
+  # buffers. Keep false on P4 full AFE while there is enough heap, because these
+  # buffers sit on the mic TX path during calls.
+  buffers_in_psram: false
+  audio:
+    # Primary/preferred RTP profile: 16 kHz/10 ms from the AFE mic toward HA
+    # and 48 kHz/10 ms toward the speaker. The 16 ms TX reframe remains for
+    # direct ESP peers that prefer that packet time.
+    tx:
+      sample_rate: 16000
+      pcm_format: s16le
+      channels: 1
+      frame_ms: 10
+    tx_formats:
+      - sample_rate: 16000
+        pcm_format: s16le
+        channels: 1
+        frame_ms: 16
+    rx:
+      sample_rate: 48000
+      pcm_format: s16le
+      channels: 1
+      frame_ms: 10
+    # Additional accepted RX formats for direct ESP-to-ESP calls. These are valid
+    # only because speaker: voip_speaker_input points at the resampler; do
+    # not advertise additional formats when wiring voip_stack directly to a
+    # fixed-rate mixer input.
+    rx_formats:
+      - sample_rate: 16000
+        pcm_format: s16le
+        channels: 1
+        frame_ms: 10
+      - sample_rate: 32000
+        pcm_format: s16le
+        channels: 1
+        frame_ms: 16
+      - sample_rate: 16000
+        pcm_format: s16le
+        channels: 1
+        frame_ms: 16
+      - sample_rate: 16000
+        pcm_format: s16le
+        channels: 1
+        frame_ms: 32
+  microphone: mic_afe          # Post-AEC: no echo in transmitted audio
+  speaker: voip_speaker_input
+  ringing_timeout: 30s
+  # routing_mode default = device_independent (P2P). Override at runtime
+  # via the "SIP bridge" switch in the SWITCHES block below.
+  delete_contact_missing_from:
+    updates_number: 1
+  on_phonebook_update:
+    - lambda: 'id(peer_name) = destination;'
+    - script.execute: draw_display
+    - delay: 2s
+    - script.execute: update_ic_idle_labels
+  on_destination_changed:
+    - lambda: 'id(peer_name) = destination;'
+    - script.execute: update_ic_idle_labels
+    - script.execute: draw_display
+
+# =============================================================================
+# DISPLAY AND UI
+# =============================================================================
+
+# [GUITION] JD9365 panel. "New Panel" boards use JC8012P4A1-V2 (70 MHz /
+# 1.5 Gbps); the original panel is JC8012P4A1 (60 MHz / 1 Gbps). Timings and
+# the init sequence come from the model in the intercom's mipi_dsi fork.
+
+display:
+  - platform: mipi_dsi
+    id: main_display
+    model: JC8012P4A1-V2
+    reset_pin: ${display_reset_pin} # GPIO27
+    update_interval: never
+    auto_clear_enabled: false
+
+# [GUITION] GSL3680 touch controller. ESPHome's gsl3670 driver has a model
+# preset for this board (reset GPIO22, INT GPIO21, axis mapping, firmware blob).
+touchscreen:
+  - platform: gsl3670
+    id: main_touch
+    model: GUITION-JC8012P4A1
+    i2c_id: internal_i2c
+    display: main_display
+    on_touch:
+      - output.set_level:
+          id: backlight_pwm
+          level: 100%
+      - script.execute: backlight_timer
+
+font:
+  - file:
+      type: gfonts
+      family: Noto Sans
+      weight: 700
+    id: font_title
+    size: 32
+    glyphsets: [GF_Latin_Core]
+
+  - file:
+      type: gfonts
+      family: Noto Sans
+      weight: 700
+    id: font_state
+    size: 48
+    glyphsets: [GF_Latin_Core]
+
+  - file:
+      type: gfonts
+      family: Noto Sans
+      weight: 400
+    id: font_body
+    size: 22
+    glyphsets: [GF_Latin_Core]
+
+  - file:
+      type: gfonts
+      family: Noto Sans
+      weight: 400
+    id: font_small
+    size: 16
+    glyphsets: [GF_Latin_Core]
+
+  - file:
+      type: gfonts
+      family: Noto Sans
+      weight: 500
+    id: font_ui_medium
+    size: 24
+    glyphsets: [GF_Latin_Core]
+  - file:
+      type: gfonts
+      family: Noto Sans
+      weight: 400
+    id: font_response
+    size: 20
+    glyphsets: [GF_Latin_Core]
+
+  - file:
+      type: gfonts
+      family: Roboto Mono
+      weight: 400
+    id: font_timer
+    size: 36
+    glyphs: "0123456789:"
+
+  - file: "https://raw.githubusercontent.com/Templarian/MaterialDesign-Webfont/master/fonts/materialdesignicons-webfont.ttf"
+    id: font_weather_icon
+    size: 100
+    glyphs:
+      - "\U000F0590"  # weather-cloudy
+      - "\U000F0591"  # weather-fog
+      - "\U000F0592"  # weather-hail
+      - "\U000F0593"  # weather-lightning
+      - "\U000F0594"  # weather-night
+      - "\U000F0595"  # weather-partly-cloudy
+      - "\U000F0596"  # weather-pouring
+      - "\U000F0597"  # weather-rainy
+      - "\U000F0598"  # weather-snowy
+      - "\U000F0599"  # weather-sunny
+      - "\U000F059D"  # weather-windy
+      - "\U000F059E"  # weather-windy-variant
+      - "\U000F067E"  # weather-lightning-rainy
+      - "\U000F067F"  # weather-snowy-rainy
+      - "\U000F0F37"  # weather-cloudy-alert
+
+  - file: "https://raw.githubusercontent.com/Templarian/MaterialDesign-Webfont/master/fonts/materialdesignicons-webfont.ttf"
+    id: font_action_icon
+    size: 34
+    glyphs:
+      - "\U000F0141"  # mdi:chevron-left
+      - "\U000F0142"  # mdi:chevron-right
+      - "\U000F03F2"  # mdi:phone
+      - "\U000F03F5"  # mdi:phone-hangup
+      - "\U000F036C"  # mdi:microphone
+      - "\U000F036D"  # mdi:microphone-off
+      - "\U000F0493"  # mdi:cog
+      - "\U000F057E"  # mdi:volume-high
+      - "\U000F0581"  # mdi:volume-off
+      - "\U000F07F4"  # mdi:do-not-disturb
+
+  - file: "https://raw.githubusercontent.com/Templarian/MaterialDesign-Webfont/master/fonts/materialdesignicons-webfont.ttf"
+    id: font_weather_icon_sm
+    size: 36
+    glyphs:
+      - "\U000F0590"
+      - "\U000F0591"
+      - "\U000F0592"
+      - "\U000F0593"
+      - "\U000F0594"
+      - "\U000F0595"
+      - "\U000F0596"
+      - "\U000F0597"
+      - "\U000F0598"
+      - "\U000F0599"
+      - "\U000F059D"
+      - "\U000F059E"
+      - "\U000F067E"
+      - "\U000F067F"
+      - "\U000F0F37"
+
+image:
+  # VA state images
+  - platform: file
+    file: ${assets_base}assets/images/assistant/${ai_avatar}/listening.png
+    id: img_listening
+    resize: ${ai_avatar_size}
+    type: RGB565
+    byte_order: little_endian
+  - platform: file
+    file: ${assets_base}assets/images/assistant/${ai_avatar}/thinking.png
+    id: img_thinking
+    resize: ${ai_avatar_size}
+    type: RGB565
+    byte_order: little_endian
+  - platform: file
+    file: ${assets_base}assets/images/assistant/${ai_avatar}/error.png
+    id: img_error
+    resize: ${ai_avatar_size}
+    type: RGB565
+    byte_order: little_endian
+  # Mood backgrounds for replying (set based on LLM emoticon prefix)
+  - platform: file
+    file: ${assets_base}assets/images/assistant/${ai_avatar}/happy.png
+    id: mood_happy
+    resize: ${ai_avatar_size}
+    type: RGB565
+    byte_order: little_endian
+  - platform: file
+    file: ${assets_base}assets/images/assistant/${ai_avatar}/neutral.png
+    id: mood_neutral
+    resize: ${ai_avatar_size}
+    type: RGB565
+    byte_order: little_endian
+  - platform: file
+    file: ${assets_base}assets/images/assistant/${ai_avatar}/angry.png
+    id: mood_angry
+    resize: ${ai_avatar_size}
+    type: RGB565
+    byte_order: little_endian
+  # Overlay page images
+  - platform: file
+    file: ${assets_base}assets/images/assistant/${ai_avatar}/error_no_wifi.png
+    id: error_no_wifi
+    resize: ${ai_avatar_size}
+    type: RGB565
+    byte_order: little_endian
+  - platform: file
+    file: ${assets_base}assets/images/assistant/${ai_avatar}/error_no_ha.png
+    id: error_no_ha
+    resize: ${ai_avatar_size}
+    type: RGB565
+    byte_order: little_endian
+  - platform: file
+    file: ${assets_base}assets/images/assistant/${ai_avatar}/idle_00.png
+    id: idle_00
+    resize: ${ai_avatar_size}
+    type: RGB565
+    byte_order: little_endian
+  - platform: file
+    file: ${assets_base}assets/images/assistant/${ai_avatar}/idle_01.png
+    id: idle_01
+    resize: ${ai_avatar_size}
+    type: RGB565
+    byte_order: little_endian
+  - platform: file
+    file: ${assets_base}assets/images/assistant/${ai_avatar}/idle_02.png
+    id: idle_02
+    resize: ${ai_avatar_size}
+    type: RGB565
+    byte_order: little_endian
+  - platform: file
+    file: ${assets_base}assets/images/assistant/${ai_avatar}/idle_03.png
+    id: idle_03
+    resize: ${ai_avatar_size}
+    type: RGB565
+    byte_order: little_endian
+  - platform: file
+    file: ${assets_base}assets/images/assistant/${ai_avatar}/idle_04.png
+    id: idle_04
+    resize: ${ai_avatar_size}
+    type: RGB565
+    byte_order: little_endian
+  - platform: file
+    file: ${assets_base}assets/images/assistant/${ai_avatar}/idle_05.png
+    id: idle_05
+    resize: ${ai_avatar_size}
+    type: RGB565
+    byte_order: little_endian
+  - platform: file
+    file: ${assets_base}assets/images/assistant/${ai_avatar}/idle_06.png
+    id: idle_06
+    resize: ${ai_avatar_size}
+    type: RGB565
+    byte_order: little_endian
+  - platform: file
+    file: ${assets_base}assets/images/assistant/${ai_avatar}/idle_07.png
+    id: idle_07
+    resize: ${ai_avatar_size}
+    type: RGB565
+    byte_order: little_endian
+  - platform: file
+    file: ${assets_base}assets/images/assistant/${ai_avatar}/idle_08.png
+    id: idle_08
+    resize: ${ai_avatar_size}
+    type: RGB565
+    byte_order: little_endian
+  - platform: file
+    file: ${assets_base}assets/images/assistant/${ai_avatar}/idle_09.png
+    id: idle_09
+    resize: ${ai_avatar_size}
+    type: RGB565
+    byte_order: little_endian
+  - platform: file
+    file: ${assets_base}assets/images/assistant/${ai_avatar}/idle_10.png
+    id: idle_10
+    resize: ${ai_avatar_size}
+    type: RGB565
+    byte_order: little_endian
+  - platform: file
+    file: ${assets_base}assets/images/assistant/${ai_avatar}/idle_11.png
+    id: idle_11
+    resize: ${ai_avatar_size}
+    type: RGB565
+    byte_order: little_endian
+  - platform: file
+    file: ${assets_base}assets/images/assistant/${ai_avatar}/idle_12.png
+    id: idle_12
+    resize: ${ai_avatar_size}
+    type: RGB565
+    byte_order: little_endian
+  - platform: file
+    file: ${assets_base}assets/images/assistant/${ai_avatar}/idle_13.png
+    id: idle_13
+    resize: ${ai_avatar_size}
+    type: RGB565
+    byte_order: little_endian
+  - platform: file
+    file: ${assets_base}assets/images/assistant/${ai_avatar}/idle_14.png
+    id: idle_14
+    resize: ${ai_avatar_size}
+    type: RGB565
+    byte_order: little_endian
+  - platform: file
+    file: ${assets_base}assets/images/assistant/${ai_avatar}/idle_15.png
+    id: idle_15
+    resize: ${ai_avatar_size}
+    type: RGB565
+    byte_order: little_endian
+  - platform: file
+    file: ${assets_base}assets/images/assistant/${ai_avatar}/idle_16.png
+    id: idle_16
+    resize: ${ai_avatar_size}
+    type: RGB565
+    byte_order: little_endian
+  - platform: file
+    file: ${assets_base}assets/images/assistant/${ai_avatar}/idle_17.png
+    id: idle_17
+    resize: ${ai_avatar_size}
+    type: RGB565
+    byte_order: little_endian
+  - platform: file
+    file: ${assets_base}assets/images/assistant/${ai_avatar}/idle_18.png
+    id: idle_18
+    resize: ${ai_avatar_size}
+    type: RGB565
+    byte_order: little_endian
+  - platform: file
+    file: ${assets_base}assets/images/assistant/${ai_avatar}/idle_19.png
+    id: idle_19
+    resize: ${ai_avatar_size}
+    type: RGB565
+    byte_order: little_endian
+
+lvgl:
+  displays:
+    - main_display
+  touchscreens:
+    - main_touch
+  color_depth: 16
+  # Leave buffer_size at ESPHome default: it first tries a full-screen draw
+  # buffer. With rotation enabled below, LVGL also allocates the software
+  # rotation buffer; on ESP32-P4 that path is PPA accelerated.
+  byte_order: little_endian
+  log_level: WARN
+  rotation: 270         # Landscape UI on the native 800x1280 panel, flipped 180 degrees
+
+  # Timer overlay (always visible on top, hidden by default)
+  top_layer:
+    widgets:
+      - obj:
+          id: timer_overlay
+          align: TOP_MID
+          width: 400
+          height: 50
+          y: 5
+          bg_color: 0xFFFFFF
+          border_color: 0x000000
+          border_width: 1
+          radius: 8
+          hidden: true
+          widgets:
+            - bar:
+                id: timer_bar
+                align: CENTER
+                width: 390
+                height: 40
+                min_value: 0
+                max_value: 100
+                value: 100
+                indicator:
+                  bg_color: 0x26ED3A
+            - label:
+                id: timer_label
+                align: CENTER
+                text: ""
+                text_color: 0x000000
+                text_font: font_timer
+
+  pages:
+    # ==================================================================
+    # INITIALIZING
+    # ==================================================================
+    - id: initializing_page
+      bg_color: 0x000000
+      widgets:
+        - label:
+            align: CENTER
+            text: "Initializing..."
+            text_color: 0x888888
+            text_font: font_state
+
+    # ==================================================================
+    # NO WIFI
+    # ==================================================================
+    - id: no_wifi_page
+      bg_color: 0x000000
+      widgets:
+        - label:
+            align: TOP_MID
+            y: 60
+            text: "No WiFi"
+            text_color: 0xE74C3C
+            text_font: font_state
+        - label:
+            align: TOP_MID
+            y: 120
+            text: "Waiting for connection..."
+            text_color: 0x888888
+            text_font: font_body
+        - image:
+            align: CENTER
+            y: 40
+            src: error_no_wifi
+
+    # ==================================================================
+    # NO HOME ASSISTANT
+    # ==================================================================
+    - id: no_ha_page
+      bg_color: 0x000000
+      widgets:
+        - label:
+            align: TOP_MID
+            y: 60
+            text: "No Home Assistant"
+            text_color: 0xF39C12
+            text_font: font_state
+        - label:
+            align: TOP_MID
+            y: 120
+            text: "Waiting for API connection..."
+            text_color: 0x888888
+            text_font: font_body
+        - image:
+            align: CENTER
+            y: 40
+            src: error_no_ha
+
+    # ==================================================================
+    # VA: TIMER FINISHED
+    # ==================================================================
+    - id: timer_finished_page
+      bg_color: 0x000000
+      widgets:
+        - label:
+            align: CENTER
+            y: -40
+            text: "Timer!"
+            text_color: 0xF39C12
+            text_font: font_state
+        - button:
+            align: CENTER
+            y: 60
+            width: 200
+            height: 60
+            bg_color: 0xE74C3C
+            radius: 10
+            on_click:
+              - runtime_controller.event:
+                  id: runtime
+                  event: timer_stopped
+            widgets:
+              - label:
+                  align: CENTER
+                  text: "Stop"
+                  text_color: 0xFFFFFF
+                  text_font: font_ui_medium
+
+    # ==================================================================
+    # MAIN PAGE: landscape dashboard, weather/VoIP left, VA right
+    # ==================================================================
+    - id: main_page
+      bg_color: 0x05070D
+      on_unload:
+        - script.stop: ai_animation_loop
+      # Vertical-up swipe opens the unified settings page by pushing the main
+      # screen upward. The VoIP destination area keeps horizontal gestures
+      # local, so page-level settings navigation stays vertical only.
+      on_swipe_up:
+        - lvgl.page.show:
+            id: settings_p4_page
+            animation: MOVE_TOP
+            time: 250ms
+      widgets:
+        # === LEFT: WEATHER PANEL ===
+        - obj:
+            id: weather_tile
+            x: 0
+            y: 0
+            width: 1
+            height: 1
+            bg_color: 0x101624
+            border_color: 0x34506D
+            border_width: 1
+            radius: 8
+            pad_all: 0
+            scrollable: false
+            scrollbar_mode: "off"
+            widgets:
+              - label:
+                  id: weather_date_label
+                  align: TOP_MID
+                  y: 20
+                  width: 320
+                  text: ""
+                  text_color: 0x9AA4B2
+                  text_font: font_ui_medium
+                  text_align: CENTER
+                  long_mode: CLIP
+              - label:
+                  id: weather_icon_label
+                  align: TOP_MID
+                  y: 76
+                  text: "\U000F0599"
+                  text_font: font_weather_icon
+                  text_color: 0xFFD166
+              - label:
+                  id: weather_temp_label
+                  align: TOP_MID
+                  y: 185
+                  text: "--°"
+                  text_font: font_state
+                  text_color: 0xFFFFFF
+              - label:
+                  id: weather_condition_label
+                  align: TOP_MID
+                  y: 250
+                  width: 320
+                  text: ""
+                  text_font: font_body
+                  text_color: 0xC6D0DF
+                  text_align: CENTER
+                  long_mode: DOT
+              - label:
+                  id: weather_location_label
+                  align: TOP_MID
+                  y: 285
+                  width: 320
+                  text: ""
+                  text_font: font_small
+                  text_color: 0x8A94A6
+                  text_align: CENTER
+                  long_mode: DOT
+              - obj:
+                  id: weather_rule
+                  align: TOP_MID
+                  y: 326
+                  width: 312
+                  height: 1
+                  bg_color: 0x2D3C58
+                  border_width: 0
+              - label:
+                  id: weather_details_label
+                  align: TOP_MID
+                  y: 346
+                  width: 320
+                  text: ""
+                  text_font: font_small
+                  text_color: 0xAAB4C2
+                  text_align: CENTER
+                  long_mode: DOT
+              - obj:
+                  id: forecast_container
+                  align: TOP_MID
+                  y: 398
+                  width: 330
+                  height: 336
+                  bg_color: 0x0B111A
+                  bg_opa: COVER
+                  border_color: 0x22324A
+                  border_width: 1
+                  radius: 8
+                  scrollable: false
+                  scrollbar_mode: "off"
+                  layout:
+                    type: FLEX
+                    flex_flow: COLUMN
+                    flex_align_main: START
+                    flex_align_cross: CENTER
+                    pad_row: 6
+                  pad_top: 10
+                  pad_bottom: 10
+                  pad_left: 10
+                  pad_right: 10
+                  widgets:
+                    - obj:
+                        id: fc0_row
+                        width: 306
+                        height: 58
+                        bg_opa: TRANSP
+                        border_width: 0
+                        scrollable: false
+                        layout:
+                          type: FLEX
+                          flex_flow: ROW
+                          flex_align_main: SPACE_BETWEEN
+                          flex_align_cross: CENTER
+                        widgets:
+                          - label:
+                              id: fc0_day_label
+                              width: 92
+                              text: "--"
+                              text_font: font_small
+                              text_color: 0x6EE7B7
+                              text_align: LEFT
+                          - label:
+                              id: fc0_icon_label
+                              width: 48
+                              text: "\U000F0599"
+                              text_font: font_weather_icon_sm
+                              text_color: 0xFFD166
+                              text_align: CENTER
+                          - label:
+                              id: fc0_max_label
+                              width: 56
+                              text: "--°"
+                              text_font: font_small
+                              text_color: 0xFF6B6B
+                              text_align: RIGHT
+                          - label:
+                              id: fc0_min_label
+                              width: 56
+                              text: "--°"
+                              text_font: font_small
+                              text_color: 0x6BA3FF
+                              text_align: RIGHT
+                    - obj:
+                        id: fc1_row
+                        width: 306
+                        height: 58
+                        bg_opa: TRANSP
+                        border_width: 0
+                        scrollable: false
+                        layout:
+                          type: FLEX
+                          flex_flow: ROW
+                          flex_align_main: SPACE_BETWEEN
+                          flex_align_cross: CENTER
+                        widgets:
+                          - label:
+                              id: fc1_day_label
+                              width: 92
+                              text: "--"
+                              text_font: font_small
+                              text_color: 0x6EE7B7
+                              text_align: LEFT
+                          - label:
+                              id: fc1_icon_label
+                              width: 48
+                              text: "\U000F0599"
+                              text_font: font_weather_icon_sm
+                              text_color: 0xFFD166
+                              text_align: CENTER
+                          - label:
+                              id: fc1_max_label
+                              width: 56
+                              text: "--°"
+                              text_font: font_small
+                              text_color: 0xFF6B6B
+                              text_align: RIGHT
+                          - label:
+                              id: fc1_min_label
+                              width: 56
+                              text: "--°"
+                              text_font: font_small
+                              text_color: 0x6BA3FF
+                              text_align: RIGHT
+                    - obj:
+                        id: fc2_row
+                        width: 306
+                        height: 58
+                        bg_opa: TRANSP
+                        border_width: 0
+                        scrollable: false
+                        layout:
+                          type: FLEX
+                          flex_flow: ROW
+                          flex_align_main: SPACE_BETWEEN
+                          flex_align_cross: CENTER
+                        widgets:
+                          - label:
+                              id: fc2_day_label
+                              width: 92
+                              text: "--"
+                              text_font: font_small
+                              text_color: 0x6EE7B7
+                              text_align: LEFT
+                          - label:
+                              id: fc2_icon_label
+                              width: 48
+                              text: "\U000F0599"
+                              text_font: font_weather_icon_sm
+                              text_color: 0xFFD166
+                              text_align: CENTER
+                          - label:
+                              id: fc2_max_label
+                              width: 56
+                              text: "--°"
+                              text_font: font_small
+                              text_color: 0xFF6B6B
+                              text_align: RIGHT
+                          - label:
+                              id: fc2_min_label
+                              width: 56
+                              text: "--°"
+                              text_font: font_small
+                              text_color: 0x6BA3FF
+                              text_align: RIGHT
+                    - obj:
+                        id: fc3_row
+                        width: 306
+                        height: 58
+                        bg_opa: TRANSP
+                        border_width: 0
+                        scrollable: false
+                        layout:
+                          type: FLEX
+                          flex_flow: ROW
+                          flex_align_main: SPACE_BETWEEN
+                          flex_align_cross: CENTER
+                        widgets:
+                          - label:
+                              id: fc3_day_label
+                              width: 92
+                              text: "--"
+                              text_font: font_small
+                              text_color: 0x6EE7B7
+                              text_align: LEFT
+                          - label:
+                              id: fc3_icon_label
+                              width: 48
+                              text: "\U000F0599"
+                              text_font: font_weather_icon_sm
+                              text_color: 0xFFD166
+                              text_align: CENTER
+                          - label:
+                              id: fc3_max_label
+                              width: 56
+                              text: "--°"
+                              text_font: font_small
+                              text_color: 0xFF6B6B
+                              text_align: RIGHT
+                          - label:
+                              id: fc3_min_label
+                              width: 56
+                              text: "--°"
+                              text_font: font_small
+                              text_color: 0x6BA3FF
+                              text_align: RIGHT
+                    - obj:
+                        id: fc4_row
+                        width: 306
+                        height: 58
+                        bg_opa: TRANSP
+                        border_width: 0
+                        scrollable: false
+                        layout:
+                          type: FLEX
+                          flex_flow: ROW
+                          flex_align_main: SPACE_BETWEEN
+                          flex_align_cross: CENTER
+                        widgets:
+                          - label:
+                              id: fc4_day_label
+                              width: 92
+                              text: "--"
+                              text_font: font_small
+                              text_color: 0x6EE7B7
+                              text_align: LEFT
+                          - label:
+                              id: fc4_icon_label
+                              width: 48
+                              text: "\U000F0599"
+                              text_font: font_weather_icon_sm
+                              text_color: 0xFFD166
+                              text_align: CENTER
+                          - label:
+                              id: fc4_max_label
+                              width: 56
+                              text: "--°"
+                              text_font: font_small
+                              text_color: 0xFF6B6B
+                              text_align: RIGHT
+                          - label:
+                              id: fc4_min_label
+                              width: 56
+                              text: "--°"
+                              text_font: font_small
+                              text_color: 0x6BA3FF
+                              text_align: RIGHT
+
+        # === RIGHT TOP: VOIP PANEL ===
+        - obj:
+            id: voip_tile
+            x: 0
+            y: 0
+            width: 1
+            height: 1
+            bg_color: 0x111320
+            border_color: 0x4A3B78
+            border_width: 1
+            radius: 8
+            pad_all: 0
+            scrollable: false
+            scrollbar_mode: "off"
+            widgets:
+              - obj:
+                  id: call_idle_group
+                  width: 1
+                  height: 1
+                  bg_opa: TRANSP
+                  border_width: 0
+                  pad_all: 0
+                  scrollable: false
+                  scrollbar_mode: "off"
+                  widgets:
+                    - label:
+                        id: call_idle_header_label
+                        align: TOP_MID
+                        y: 20
+                        text: "Keyboard"
+                        text_color: 0x7C83FF
+                        text_font: font_ui_medium
+                        clickable: true
+                        gesture_bubble: false
+                        on_click:
+                          - script.execute: show_voip_keypad
+                    - obj:
+                        id: call_idle_header_rule
+                        align: TOP_MID
+                        y: 56
+                        width: 112
+                        height: 3
+                        bg_color: 0x7C83FF
+                        border_width: 0
+                        radius: 2
+                    - label:
+                        id: call_idle_destination_label
+                        align: TOP_MID
+                        y: 82
+                        width: 300
+                        text: "Destination"
+                        text_color: 0x8A94A6
+                        text_font: font_small
+                        text_align: CENTER
+                    - label:
+                        id: call_idle_peer_label
+                        align: TOP_MID
+                        y: 118
+                        width: 300
+                        text: "-"
+                        text_color: 0xFFFFFF
+                        text_font: font_title
+                        text_align: CENTER
+                        long_mode: DOT
+                    - label:
+                        id: call_idle_contacts_label
+                        align: TOP_MID
+                        y: 172
+                        text: "Contacts: 0"
+                        text_color: 0x8A94A6
+                        text_font: font_small
+                    - label:
+                        id: call_idle_hint_label
+                        align: TOP_MID
+                        y: 212
+                        width: 290
+                        text: "Swipe to browse or use controls"
+                        text_color: 0x667085
+                        text_font: font_small
+                        text_align: CENTER
+                        long_mode: DOT
+                    - obj:
+                        id: call_idle_swipe_area
+                        align: TOP_MID
+                        y: 80
+                        width: 310
+                        height: 170
+                        bg_opa: TRANSP
+                        border_width: 0
+                        scrollable: false
+                        clickable: true
+                        gesture_bubble: false
+                        on_swipe_left:
+                          - voip_stack.next_contact:
+                          - script.execute: update_ic_idle_labels
+                        on_swipe_right:
+                          - voip_stack.prev_contact:
+                          - script.execute: update_ic_idle_labels
+                    - button:
+                        id: call_prev_btn
+                        align: BOTTOM_LEFT
+                        x: 22
+                        y: -30
+                        width: 78
+                        height: 64
+                        bg_color: 0x252A38
+                        radius: 8
+                        on_click:
+                          - voip_stack.prev_contact:
+                        widgets:
+                          - label:
+                              align: CENTER
+                              text: "\U000F0141"
+                              text_color: 0xE5E7EB
+                              text_font: font_action_icon
+                    - button:
+                        id: call_button_widget
+                        align: BOTTOM_MID
+                        y: -24
+                        width: 92
+                        height: 78
+                        bg_color: 0x22C55E
+                        radius: 8
+                        on_click:
+                          - voip_stack.call_toggle:
+                        widgets:
+                          - label:
+                              align: CENTER
+                              text: "\U000F03F2"
+                              text_color: 0xFFFFFF
+                              text_font: font_action_icon
+                    - button:
+                        id: call_next_btn
+                        align: BOTTOM_RIGHT
+                        x: -22
+                        y: -30
+                        width: 78
+                        height: 64
+                        bg_color: 0x252A38
+                        radius: 8
+                        on_click:
+                          - voip_stack.next_contact:
+                        widgets:
+                          - label:
+                              align: CENTER
+                              text: "\U000F0142"
+                              text_color: 0xE5E7EB
+                              text_font: font_action_icon
+              - obj:
+                  id: call_keypad_group
+                  width: 1
+                  height: 1
+                  bg_color: 0x111320
+                  border_width: 0
+                  pad_all: 0
+                  scrollable: false
+                  clickable: true
+                  gesture_bubble: false
+                  hidden: true
+                  widgets:
+                    - label:
+                        id: call_keypad_header_label
+                        align: TOP_MID
+                        y: 20
+                        text: "Contacts"
+                        text_color: 0x7C83FF
+                        text_font: font_ui_medium
+                        clickable: true
+                        gesture_bubble: false
+                        on_click:
+                          - script.execute: hide_voip_keypad
+                    - obj:
+                        id: call_keypad_header_rule
+                        align: TOP_MID
+                        y: 56
+                        width: 100
+                        height: 3
+                        bg_color: 0x7C83FF
+                        border_width: 0
+                        radius: 2
+                    - label:
+                        id: call_keypad_value_label
+                        align: TOP_MID
+                        y: 74
+                        width: 300
+                        text: "Enter extension or number"
+                        text_color: 0xFFFFFF
+                        text_font: font_small
+                        text_align: CENTER
+                        long_mode: DOT
+                    - buttonmatrix:
+                        id: call_keypad_matrix
+                        align: TOP_MID
+                        y: 100
+                        width: 300
+                        height: 252
+                        bg_opa: TRANSP
+                        border_width: 0
+                        pad_row: 8
+                        pad_column: 8
+                        gesture_bubble: true
+                        items:
+                          bg_color: 0x252A38
+                          text_color: 0xFFFFFF
+                          text_font: font_ui_medium
+                          radius: 8
+                        rows:
+                          - buttons:
+                              - text: "1"
+                              - text: "2"
+                              - text: "3"
+                          - buttons:
+                              - text: "4"
+                              - text: "5"
+                              - text: "6"
+                          - buttons:
+                              - text: "7"
+                              - text: "8"
+                              - text: "9"
+                          - buttons:
+                              - text: "*"
+                              - text: "0"
+                              - text: "#"
+                        on_click:
+                          - lambda: |-
+                              static constexpr char KEYS[] = "123456789*0#";
+                              if (x >= 12 || id(voip_dial_buffer).size() >= 32) return;
+                              id(voip_dial_buffer).push_back(KEYS[x]);
+                              lv_label_set_text(id(call_keypad_value_label), id(voip_dial_buffer).c_str());
+                    - button:
+                        align: BOTTOM_LEFT
+                        x: 22
+                        y: -24
+                        width: 82
+                        height: 58
+                        bg_color: 0x252A38
+                        radius: 8
+                        on_click:
+                          - lambda: |-
+                              id(voip_dial_buffer).clear();
+                              lv_label_set_text(id(call_keypad_value_label), "Enter extension or number");
+                        widgets:
+                          - label:
+                              align: CENTER
+                              text: "CLEAR"
+                              text_color: 0xE5E7EB
+                              text_font: font_small
+                    - button:
+                        align: BOTTOM_MID
+                        y: -24
+                        width: 112
+                        height: 58
+                        bg_color: 0x22C55E
+                        radius: 8
+                        on_click:
+                          - if:
+                              condition:
+                                lambda: return !id(voip_dial_buffer).empty();
+                              then:
+                                - voip_stack.call:
+                                    target: !lambda 'return id(voip_dial_buffer);'
+                                - lambda: |-
+                                    id(voip_dial_buffer).clear();
+                                    lv_label_set_text(id(call_keypad_value_label), "Enter extension or number");
+                        widgets:
+                          - label:
+                              align: CENTER
+                              text: "\U000F03F2"
+                              text_color: 0xFFFFFF
+                              text_font: font_action_icon
+                    - button:
+                        align: BOTTOM_RIGHT
+                        x: -22
+                        y: -24
+                        width: 82
+                        height: 58
+                        bg_color: 0x252A38
+                        radius: 8
+                        on_click:
+                          - lambda: |-
+                              if (!id(voip_dial_buffer).empty()) id(voip_dial_buffer).pop_back();
+                              lv_label_set_text(id(call_keypad_value_label), id(voip_dial_buffer).empty()
+                                  ? "Enter extension or number" : id(voip_dial_buffer).c_str());
+                        widgets:
+                          - label:
+                              align: CENTER
+                              text: "DEL"
+                              text_color: 0xE5E7EB
+                              text_font: font_ui_medium
+              - obj:
+                  id: call_ringing_in_group
+                  width: 1
+                  height: 1
+                  bg_color: 0x2A0710
+                  border_width: 0
+                  pad_all: 0
+                  scrollable: false
+                  hidden: true
+                  widgets:
+                    - label:
+                        align: TOP_MID
+                        y: 42
+                        text: "Incoming call"
+                        text_color: 0xFF5B6E
+                        text_font: font_ui_medium
+                    - label:
+                        id: call_ringing_in_peer_label
+                        align: CENTER
+                        y: -38
+                        width: 300
+                        text: ""
+                        text_color: 0xFFFFFF
+                        text_font: font_title
+                        text_align: CENTER
+                        long_mode: DOT
+                    - button:
+                        align: BOTTOM_LEFT
+                        x: 22
+                        y: -38
+                        width: 140
+                        height: 78
+                        bg_color: 0x22C55E
+                        radius: 8
+                        on_click:
+                          - voip_stack.answer_call:
+                        widgets:
+                          - label:
+                              align: CENTER
+                              text: "ANSWER"
+                              text_color: 0xFFFFFF
+                              text_font: font_ui_medium
+                    - button:
+                        align: BOTTOM_RIGHT
+                        x: -22
+                        y: -38
+                        width: 140
+                        height: 78
+                        bg_color: 0xEF4444
+                        radius: 8
+                        on_click:
+                          - voip_stack.decline_call:
+                        widgets:
+                          - label:
+                              align: CENTER
+                              text: "DECLINE"
+                              text_color: 0xFFFFFF
+                              text_font: font_ui_medium
+              - obj:
+                  id: call_ringing_out_group
+                  width: 1
+                  height: 1
+                  bg_color: 0x21160A
+                  border_width: 0
+                  pad_all: 0
+                  scrollable: false
+                  hidden: true
+                  widgets:
+                    - label:
+                        id: call_ringing_out_status_label
+                        align: TOP_MID
+                        y: 42
+                        text: "CALLING"
+                        text_color: 0xF59E0B
+                        text_font: font_ui_medium
+                    - label:
+                        id: call_ringing_out_peer_label
+                        align: CENTER
+                        y: -38
+                        width: 300
+                        text: ""
+                        text_color: 0xFFFFFF
+                        text_font: font_title
+                        text_align: CENTER
+                        long_mode: DOT
+                    - label:
+                        align: CENTER
+                        y: 22
+                        text: "Waiting for answer"
+                        text_color: 0xC6D0DF
+                        text_font: font_small
+                    - button:
+                        align: BOTTOM_MID
+                        y: -38
+                        width: 156
+                        height: 78
+                        bg_color: 0xEF4444
+                        radius: 8
+                        on_click:
+                          - voip_stack.call_toggle:
+                        widgets:
+                          - label:
+                              align: CENTER
+                              text: "HANG UP"
+                              text_color: 0xFFFFFF
+                              text_font: font_ui_medium
+              - obj:
+                  id: call_in_call_group
+                  width: 1
+                  height: 1
+                  bg_color: 0x062414
+                  border_width: 0
+                  pad_all: 0
+                  scrollable: false
+                  hidden: true
+                  widgets:
+                    - label:
+                        align: TOP_MID
+                        y: 42
+                        text: "In call"
+                        text_color: 0x22C55E
+                        text_font: font_ui_medium
+                    - label:
+                        id: p4_call_media_route_label
+                        align: TOP_MID
+                        y: 78
+                        width: 90%
+                        text: ""
+                        text_color: 0x94A3B8
+                        text_font: font_body
+                        text_align: CENTER
+                        long_mode: DOT
+                    - label:
+                        id: call_in_call_peer_label
+                        align: CENTER
+                        y: -38
+                        width: 300
+                        text: ""
+                        text_color: 0xFFFFFF
+                        text_font: font_title
+                        text_align: CENTER
+                        long_mode: DOT
+                    - button:
+                        align: BOTTOM_MID
+                        y: -38
+                        width: 156
+                        height: 78
+                        bg_color: 0xEF4444
+                        radius: 8
+                        on_click:
+                          - voip_stack.call_toggle:
+                        widgets:
+                          - label:
+                              align: CENTER
+                              text: "HANG UP"
+                              text_color: 0xFFFFFF
+                              text_font: font_ui_medium
+              - obj:
+                  id: call_ended_group
+                  width: 1
+                  height: 1
+                  bg_color: 0x191D25
+                  border_width: 0
+                  pad_all: 0
+                  scrollable: false
+                  hidden: true
+                  widgets:
+                    - label:
+                        id: call_ended_peer_label
+                        align: CENTER
+                        y: -44
+                        width: 300
+                        text: ""
+                        text_color: 0xFFFFFF
+                        text_font: font_ui_medium
+                        text_align: CENTER
+                        long_mode: WRAP
+                    - label:
+                        id: call_ended_reason_label
+                        align: CENTER
+                        y: 42
+                        width: 300
+                        text: ""
+                        text_color: 0xFFD166
+                        text_font: font_small
+                        text_align: CENTER
+                        long_mode: WRAP
+
+        # === RIGHT BOTTOM: QUICK CONTROLS ===
+        - obj:
+            id: quick_controls_panel
+            x: 0
+            y: 0
+            width: 1
+            height: 1
+            bg_color: 0x0B111B
+            border_color: 0x2E4662
+            border_width: 1
+            radius: 8
+            pad_all: 18
+            scrollable: false
+            scrollbar_mode: "off"
+            layout:
+              type: FLEX
+              flex_flow: ROW_WRAP
+              flex_align_main: SPACE_BETWEEN
+              flex_align_cross: CENTER
+              pad_row: 12
+              pad_column: 10
+            widgets:
+              - label:
+                  id: quick_controls_header
+                  width: 300
+                  height: 26
+                  text: "QUICK ACTIONS"
+                  text_color: 0x7DD3FC
+                  text_font: font_small
+                  text_align: LEFT
+              - button:
+                  id: quick_settings_btn
+                  width: 140
+                  height: 56
+                  bg_color: 0x243449
+                  radius: 8
+                  on_click:
+                    - lvgl.page.show:
+                        id: settings_p4_page
+                        animation: MOVE_TOP
+                        time: 250ms
+                  widgets:
+                    - label:
+                        align: CENTER
+                        text: "Settings"
+                        text_color: 0xFFFFFF
+                        text_font: font_small
+              - button:
+                  id: quick_mic_mute_btn
+                  width: 140
+                  height: 56
+                  bg_color: 0x2B2547
+                  radius: 8
+                  on_click:
+                    - switch.toggle: mute
+                    - delay: 100ms
+                    - script.execute: draw_display
+                  widgets:
+                    - label:
+                        id: quick_mic_mute_label
+                        align: CENTER
+                        text: "Mic mute"
+                        text_color: 0xFFFFFF
+                        text_font: font_small
+              - button:
+                  id: quick_speaker_mute_btn
+                  width: 140
+                  height: 56
+                  bg_color: 0x15364A
+                  radius: 8
+                  on_click:
+                    - switch.toggle: speaker_mute
+                    - delay: 100ms
+                    - script.execute: draw_display
+                  widgets:
+                    - label:
+                        id: quick_speaker_mute_label
+                        align: CENTER
+                        text: "Speaker"
+                        text_color: 0xFFFFFF
+                        text_font: font_small
+              - button:
+                  id: quick_dnd_btn
+                  width: 140
+                  height: 56
+                  bg_color: 0x44251D
+                  radius: 8
+                  on_click:
+                    - switch.toggle: dnd_switch
+                    - delay: 100ms
+                    - script.execute: draw_display
+                  widgets:
+                    - label:
+                        id: quick_dnd_label
+                        align: CENTER
+                        text: "DND"
+                        text_color: 0xFFFFFF
+                        text_font: font_small
+
+        # === CENTER: VOICE ASSISTANT ===
+        - obj:
+            id: va_container
+            x: 0
+            y: 0
+            width: 1
+            height: 1
+            bg_color: 0x070B16
+            border_color: 0x2F5A77
+            border_width: 1
+            radius: 8
+            pad_all: 0
+            scrollable: false
+            scrollbar_mode: "off"
+            widgets:
+              # --- VA IDLE group ---
+              - obj:
+                  id: va_idle_group
+                  width: 1
+                  height: 1
+                  bg_opa: TRANSP
+                  border_width: 0
+                  pad_all: 0
+                  scrollable: false
+                  scrollbar_mode: "off"
+                  widgets:
+                    - label:
+                        align: TOP_MID
+                        y: 24
+                        text: "VOICE ASSISTANT"
+                        text_font: font_ui_medium
+                        text_color: 0x7DD3FC
+                    - obj:
+                        align: TOP_MID
+                        y: 62
+                        width: 110
+                        height: 3
+                        bg_color: 0x7DD3FC
+                        border_width: 0
+                        radius: 2
+                    # Touch hint (above animation)
+                    - label:
+                        id: va_hint_label
+                        align: TOP_MID
+                        y: 112
+                        text: "Push to talk or say:"
+                        text_font: font_small
+                        text_color: 0x8A94A6
+                    - label:
+                        id: va_wake_word_label
+                        align: TOP_MID
+                        y: 140
+                        width: 400
+                        text: ""
+                        text_align: CENTER
+                        text_font: font_small
+                        text_color: 0x8A94A6
+                        long_mode: DOT
+                    # Touch area over animation (pushed to bottom)
+                    - obj:
+                        id: va_touch_area
+                        align: BOTTOM_MID
+                        y: -10
+                        width: 400
+                        height: 400
+                        bg_opa: TRANSP
+                        border_width: 0
+                        scrollable: false
+                        scrollbar_mode: "off"
+                        clickable: true
+                        on_click:
+                          - runtime_controller.event:
+                              id: runtime
+                              event: manual_voice_toggle
+                        widgets:
+                          - animimg:
+                              id: idle_animation
+                              align: CENTER
+                              width: 400
+                              height: 400
+                              src:
+                                # Forward: 0→19
+                                - idle_00
+                                - idle_01
+                                - idle_02
+                                - idle_03
+                                - idle_04
+                                - idle_05
+                                - idle_06
+                                - idle_07
+                                - idle_08
+                                - idle_09
+                                - idle_10
+                                - idle_11
+                                - idle_12
+                                - idle_13
+                                - idle_14
+                                - idle_15
+                                - idle_16
+                                - idle_17
+                                - idle_18
+                                - idle_19
+                                # Hold at peak (~1s)
+                                - idle_19
+                                - idle_19
+                                - idle_19
+                                - idle_19
+                                - idle_19
+                                - idle_19
+                                - idle_19
+                                # Backward: 18→1
+                                - idle_18
+                                - idle_17
+                                - idle_16
+                                - idle_15
+                                - idle_14
+                                - idle_13
+                                - idle_12
+                                - idle_11
+                                - idle_10
+                                - idle_09
+                                - idle_08
+                                - idle_07
+                                - idle_06
+                                - idle_05
+                                - idle_04
+                                - idle_03
+                                - idle_02
+                                - idle_01
+                              duration: 6750ms
+                              auto_start: false
+
+              # --- VA LISTENING group ---
+              - obj:
+                  id: va_listening_group
+                  width: 1
+                  height: 1
+                  bg_opa: TRANSP
+                  border_width: 0
+                  pad_all: 0
+                  scrollable: false
+                  hidden: true
+                  widgets:
+                    - label:
+                        align: TOP_MID
+                        y: 80
+                        text: "Listening..."
+                        text_color: 0x2ECC71
+                        text_font: font_state
+                    - image:
+                        align: BOTTOM_MID
+                        y: -10
+                        src: img_listening
+                        clickable: true
+                        on_click:
+                          - runtime_controller.event:
+                              id: runtime
+                              event: manual_voice_toggle
+
+              # --- VA THINKING group ---
+              - obj:
+                  id: va_thinking_group
+                  width: 1
+                  height: 1
+                  bg_opa: TRANSP
+                  border_width: 0
+                  pad_all: 0
+                  scrollable: false
+                  hidden: true
+                  widgets:
+                    - label:
+                        id: thinking_text_label
+                        align: TOP_MID
+                        y: 10
+                        width: 460
+                        text: ""
+                        text_color: 0xFFFFFF
+                        text_font: font_body
+                        long_mode: WRAP
+                        text_align: CENTER
+                    - label:
+                        align: TOP_MID
+                        y: 140
+                        text: "Thinking..."
+                        text_color: 0xF39C12
+                        text_font: font_state
+                    - image:
+                        align: BOTTOM_MID
+                        y: -10
+                        src: img_thinking
+                        clickable: true
+                        on_click:
+                          - runtime_controller.event:
+                              id: runtime
+                              event: manual_voice_toggle
+
+              # --- VA REPLYING group ---
+              - obj:
+                  id: va_replying_group
+                  width: 1
+                  height: 1
+                  bg_opa: TRANSP
+                  border_width: 0
+                  pad_all: 0
+                  scrollable: false
+                  scrollbar_mode: "off"
+                  hidden: true
+                  widgets:
+                    - label:
+                        id: replying_text_label
+                        align: TOP_MID
+                        y: 10
+                        width: 460
+                        text: ""
+                        text_color: 0xFFFFFF
+                        text_font: font_response
+                        long_mode: WRAP
+                        text_align: CENTER
+                    - image:
+                        id: mood_bg
+                        align: BOTTOM_MID
+                        y: -10
+                        src: mood_neutral
+                        clickable: true
+                        on_click:
+                          - runtime_controller.event:
+                              id: runtime
+                              event: manual_voice_toggle
+
+              # --- VA ERROR group ---
+              - obj:
+                  id: va_error_group
+                  width: 1
+                  height: 1
+                  bg_opa: TRANSP
+                  border_width: 0
+                  pad_all: 0
+                  scrollable: false
+                  hidden: true
+                  widgets:
+                    - label:
+                        align: TOP_MID
+                        y: 80
+                        text: "Error"
+                        text_color: 0xE74C3C
+                        text_font: font_state
+                    - image:
+                        align: BOTTOM_MID
+                        y: -10
+                        src: img_error
+                        clickable: true
+                        on_click:
+                          - runtime_controller.event:
+                              id: runtime
+                              event: manual_voice_toggle
+
+              # --- VA MUTED group ---
+              - obj:
+                  id: va_muted_group
+                  width: 1
+                  height: 1
+                  bg_opa: TRANSP
+                  border_width: 0
+                  pad_all: 0
+                  scrollable: false
+                  hidden: true
+                  widgets:
+                    - label:
+                        align: CENTER
+                        y: -40
+                        text: "Muted"
+                        text_color: 0xE74C3C
+                        text_font: font_state
+                    - label:
+                        align: CENTER
+                        y: 20
+                        text: "Touch to unmute"
+                        text_color: 0x888888
+                        text_font: font_body
+                    - button:
+                        align: CENTER
+                        y: 100
+                        width: 200
+                        height: 60
+                        bg_color: 0x2ECC71
+                        radius: 10
+                        on_click:
+                          - switch.turn_off: mute
+                        widgets:
+                          - label:
+                              align: CENTER
+                              text: "Unmute"
+                              text_color: 0xFFFFFF
+                              text_font: font_ui_medium
+
+    # ========================================================================
+    # SETTINGS - single scrollable landscape page, all sections divider-separated.
+    #
+    # Replaces the carousel pattern used on the round Spotpear panel: on this
+    # wide touchscreen controls fit better as label/control rows in one page.
+    # This avoids per-page swipe navigation conflicting with the main dashboard.
+    #
+    # Bound entities (must exist in the device YAML):
+    #   numbers : master_volume, mic_gain (-20..30 dB post-AFE gain)
+    #   switches: speaker_mute, mute (mic), auto_answer_switch
+    #             dnd_switch, aec_switch, vad_switch
+    #             wake_word_switch
+    #   selects : aec_mode_select  (options published by esp_afe FD pipeline)
+    #
+    # Substitutions used (already defined in the device YAML):
+    #   settings_row_width      e.g. "1180"
+    #   settings_control_width  e.g. "520"
+    #   settings_row_height     e.g. "58"
+    #   settings_slider_height  e.g. "20"
+    #   settings_switch_width   e.g. "70"
+    #   settings_switch_height  e.g. "36"
+    #   settings_label_font     e.g. font_body
+    #
+    # Animation contract (driven by the device's main_page):
+    #   - swipe-up on main_page -> lvgl.page.show: settings_p4_page, MOVE_TOP
+    #   - swipe-down on this page -> lvgl.page.show: main_page, MOVE_BOTTOM
+    # =============================================================================
+    - id: settings_p4_page
+      bg_color: 0x202020
+      on_swipe_down:
+        - lvgl.page.show:
+            id: main_page
+            animation: MOVE_BOTTOM
+            time: 250ms
+      widgets:
+        # Full-screen wrapper: explicit pixel dimensions ensure the flex layout
+        # has a deterministic content area to stretch children into. Pages
+        # (top-level LVGL screens) in ESPHome have proven unreliable when used as
+        # flex containers directly; nesting one level fixes it.
+        - obj:
+            id: settings_page_wrapper
+            x: 0
+            y: 0
+            width: 1
+            height: 1
+            bg_color: 0x202020
+            border_width: 0
+            pad_top: 10
+            pad_bottom: 10
+            pad_left: 20
+            pad_right: 20
+            scrollable: true
+            scrollbar_mode: "active"
+            on_swipe_down:
+              - lvgl.page.show:
+                  id: main_page
+                  animation: MOVE_BOTTOM
+                  time: 250ms
+            layout:
+              type: flex
+              flex_flow: COLUMN
+              flex_align_main: START
+              flex_align_cross: CENTER
+              pad_row: 4
+            widgets:
+              # ------------------------------------------------------------------
+              # Header
+              # ------------------------------------------------------------------
+              - label:
+                  width: ${settings_row_width}
+                  text: "P4 Controls"
+                  text_align: CENTER
+                  text_color: 0xFFFFFF
+                  text_font: ${settings_label_font}
+
+              # ==================================================================
+              # SECTION: AUDIO
+              # ==================================================================
+              - obj:
+                  width: ${settings_row_width}
+                  height: 2
+                  bg_color: 0x444444
+                  border_width: 0
+                  pad_all: 0
+              - label:
+                  width: ${settings_row_width}
+                  text: "Audio"
+                  text_align: CENTER
+                  text_color: 0x88AAFF
+                  text_font: ${settings_label_font}
+              - obj:
+                  width: ${settings_row_width}
+                  height: ${settings_row_height}
+                  bg_opa: TRANSP
+                  border_width: 0
+                  pad_left: 12
+                  pad_right: 12
+                  scrollable: false
+                  layout:
+                    type: FLEX
+                    flex_flow: ROW
+                    flex_align_main: SPACE_BETWEEN
+                    flex_align_cross: CENTER
+                  widgets:
+                    - label:
+                        width: ${settings_mid_width}
+                        text: "Master volume"
+                        text_align: LEFT
+                        text_color: 0xFFFFFF
+                        text_font: ${settings_label_font}
+                    - slider:
+                        width: ${settings_control_width}
+                        id: ui_speaker_vol_slider
+                        height: ${settings_slider_height}
+                        adv_hittest: true
+                        gesture_bubble: true
+                        min_value: 0
+                        max_value: 100
+                        value: !lambda 'return id(master_volume).state;'
+                        on_release:
+                          - number.set:
+                              id: master_volume
+                              value: !lambda 'return x;'
+              - obj:
+                  width: ${settings_row_width}
+                  height: ${settings_row_height}
+                  bg_opa: TRANSP
+                  border_width: 0
+                  pad_left: 12
+                  pad_right: 12
+                  scrollable: false
+                  layout:
+                    type: FLEX
+                    flex_flow: ROW
+                    flex_align_main: SPACE_BETWEEN
+                    flex_align_cross: CENTER
+                  widgets:
+                    - label:
+                        width: ${settings_mid_width}
+                        text: "Mic gain"
+                        text_align: LEFT
+                        text_color: 0xFFFFFF
+                        text_font: ${settings_label_font}
+                    - slider:
+                        width: ${settings_control_width}
+                        id: ui_mic_vol_slider
+                        height: ${settings_slider_height}
+                        adv_hittest: true
+                        gesture_bubble: true
+                        min_value: ${mic_gain_min}
+                        max_value: ${mic_gain_max}
+                        value: !lambda 'return id(mic_gain).state;'
+                        on_release:
+                          - number.set:
+                              id: mic_gain
+                              value: !lambda 'return x;'
+              # SECTION: CALL AND MUTE
+              # ========================================================================
+              - obj:
+                  width: ${settings_row_width}
+                  height: 2
+                  bg_color: 0x444444
+                  border_width: 0
+                  pad_all: 0
+              - label:
+                  width: ${settings_row_width}
+                  text: "Call and Mute"
+                  text_align: CENTER
+                  text_color: 0x88AAFF
+                  text_font: ${settings_label_font}
+              - obj:
+                  width: ${settings_row_width}
+                  height: ${settings_row_height}
+                  bg_opa: TRANSP
+                  border_width: 0
+                  pad_left: 12
+                  pad_right: 12
+                  scrollable: false
+                  layout:
+                    type: FLEX
+                    flex_flow: ROW
+                    flex_align_main: SPACE_BETWEEN
+                    flex_align_cross: CENTER
+                  widgets:
+                    - label:
+                        width: ${settings_mid_width}
+                        text: "Speaker mute"
+                        text_align: LEFT
+                        text_color: 0xFFFFFF
+                        text_font: ${settings_label_font}
+                    - switch:
+                        id: ui_speaker_mute_sw
+                        width: ${settings_switch_width}
+                        height: ${settings_switch_height}
+                        state:
+                          checked: !lambda 'return id(speaker_mute).state;'
+                        on_value:
+                          - lambda: |-
+                              if (x == id(speaker_mute).state) return;
+                              if (x) id(speaker_mute).turn_on();
+                              else id(speaker_mute).turn_off();
+              - obj:
+                  width: ${settings_row_width}
+                  height: ${settings_row_height}
+                  bg_opa: TRANSP
+                  border_width: 0
+                  pad_left: 12
+                  pad_right: 12
+                  scrollable: false
+                  layout:
+                    type: FLEX
+                    flex_flow: ROW
+                    flex_align_main: SPACE_BETWEEN
+                    flex_align_cross: CENTER
+                  widgets:
+                    - label:
+                        width: ${settings_mid_width}
+                        text: "Mic mute"
+                        text_align: LEFT
+                        text_color: 0xFFFFFF
+                        text_font: ${settings_label_font}
+                    - switch:
+                        id: ui_mic_mute_sw
+                        width: ${settings_switch_width}
+                        height: ${settings_switch_height}
+                        state:
+                          checked: !lambda 'return id(mute).state;'
+                        on_value:
+                          - lambda: |-
+                              if (x == id(mute).state) return;
+                              if (x) id(mute).turn_on();
+                              else id(mute).turn_off();
+              - obj:
+                  width: ${settings_row_width}
+                  height: ${settings_row_height}
+                  bg_opa: TRANSP
+                  border_width: 0
+                  pad_left: 12
+                  pad_right: 12
+                  scrollable: false
+                  layout:
+                    type: FLEX
+                    flex_flow: ROW
+                    flex_align_main: SPACE_BETWEEN
+                    flex_align_cross: CENTER
+                  widgets:
+                    - label:
+                        width: ${settings_mid_width}
+                        text: "Auto answer"
+                        text_align: LEFT
+                        text_color: 0xFFFFFF
+                        text_font: ${settings_label_font}
+                    - switch:
+                        id: ui_auto_answer_sw
+                        width: ${settings_switch_width}
+                        height: ${settings_switch_height}
+                        state:
+                          checked: !lambda 'return id(auto_answer_switch).state;'
+                        on_value:
+                          - lambda: |-
+                              if (x == id(auto_answer_switch).state) return;
+                              if (x) id(auto_answer_switch).turn_on();
+                              else id(auto_answer_switch).turn_off();
+              - obj:
+                  width: ${settings_row_width}
+                  height: ${settings_row_height}
+                  bg_opa: TRANSP
+                  border_width: 0
+                  pad_left: 12
+                  pad_right: 12
+                  scrollable: false
+                  layout:
+                    type: FLEX
+                    flex_flow: ROW
+                    flex_align_main: SPACE_BETWEEN
+                    flex_align_cross: CENTER
+                  widgets:
+                    - label:
+                        width: ${settings_mid_width}
+                        text: "Do Not Disturb"
+                        text_align: LEFT
+                        text_color: 0xFFFFFF
+                        text_font: ${settings_label_font}
+                    - switch:
+                        id: ui_dnd_sw
+                        width: ${settings_switch_width}
+                        height: ${settings_switch_height}
+                        state:
+                          checked: !lambda 'return id(dnd_switch).state;'
+                        on_value:
+                          - lambda: |-
+                              if (x == id(dnd_switch).state) return;
+                              if (x) id(dnd_switch).turn_on();
+                              else id(dnd_switch).turn_off();
+              # ========================================================================
+              # SECTION: ECHO CANCELLATION (AEC switch + Mode dropdown)
+              # ========================================================================
+              - obj:
+                  width: ${settings_row_width}
+                  height: 2
+                  bg_color: 0x444444
+                  border_width: 0
+                  pad_all: 0
+              - label:
+                  width: ${settings_row_width}
+                  text: "Echo Cancellation"
+                  text_align: CENTER
+                  text_color: 0x88AAFF
+                  text_font: ${settings_label_font}
+              - obj:
+                  width: ${settings_row_width}
+                  height: ${settings_row_height}
+                  bg_opa: TRANSP
+                  border_width: 0
+                  pad_left: 12
+                  pad_right: 12
+                  scrollable: false
+                  layout:
+                    type: FLEX
+                    flex_flow: ROW
+                    flex_align_main: SPACE_BETWEEN
+                    flex_align_cross: CENTER
+                  widgets:
+                    - label:
+                        width: ${settings_mid_width}
+                        text: "AEC"
+                        text_align: LEFT
+                        text_color: 0xFFFFFF
+                        text_font: ${settings_label_font}
+                    - switch:
+                        id: ui_aec_sw
+                        width: ${settings_switch_width}
+                        height: ${settings_switch_height}
+                        state:
+                          checked: !lambda 'return id(aec_switch).state;'
+                        on_value:
+                          - lambda: |-
+                              if (x == id(aec_switch).state) return;
+                              if (x) id(aec_switch).turn_on();
+                              else id(aec_switch).turn_off();
+              - obj:
+                  width: ${settings_row_width}
+                  height: ${settings_row_height}
+                  bg_opa: TRANSP
+                  border_width: 0
+                  pad_left: 12
+                  pad_right: 12
+                  scrollable: false
+                  layout:
+                    type: FLEX
+                    flex_flow: ROW
+                    flex_align_main: SPACE_BETWEEN
+                    flex_align_cross: CENTER
+                  widgets:
+                    - label:
+                        width: ${settings_mid_width}
+                        text: "AEC mode"
+                        text_align: LEFT
+                        text_color: 0xFFFFFF
+                        text_font: ${settings_label_font}
+                    - dropdown:
+                        id: ui_aec_mode_dd
+                        width: ${settings_dropdown_width}
+                        options:
+                          - "fd_low_cost"
+                          - "fd_high_perf"
+                        selected_text: !lambda 'return id(aec_mode_select).current_option();'
+                        on_value:
+                          - select.set_index:
+                              id: aec_mode_select
+                              index: !lambda 'return x;'
+
+              - obj:
+                  width: ${settings_row_width}
+                  height: ${settings_row_height}
+                  bg_opa: TRANSP
+                  border_width: 0
+                  pad_left: 12
+                  pad_right: 12
+                  scrollable: false
+                  layout:
+                    type: FLEX
+                    flex_flow: ROW
+                    flex_align_main: SPACE_BETWEEN
+                    flex_align_cross: CENTER
+                  widgets:
+                    - label:
+                        width: ${settings_mid_width}
+                        text: "Voice Activity Detector"
+                        text_align: LEFT
+                        text_color: 0xFFFFFF
+                        text_font: ${settings_label_font}
+                    - switch:
+                        id: ui_vad_sw
+                        width: ${settings_switch_width}
+                        height: ${settings_switch_height}
+                        state:
+                          checked: !lambda 'return id(vad_switch).state;'
+                        on_value:
+                          - lambda: |-
+                              if (x) id(vad_switch).turn_on();
+                              else id(vad_switch).turn_off();
+
+              # ========================================================================
+              # SECTION: VOICE ASSISTANT
+              # ========================================================================
+              - obj:
+                  width: ${settings_row_width}
+                  height: 2
+                  bg_color: 0x444444
+                  border_width: 0
+                  pad_all: 0
+              - label:
+                  width: ${settings_row_width}
+                  text: "Voice Assistant"
+                  text_align: CENTER
+                  text_color: 0x88AAFF
+                  text_font: ${settings_label_font}
+              - obj:
+                  width: ${settings_row_width}
+                  height: ${settings_row_height}
+                  bg_opa: TRANSP
+                  border_width: 0
+                  pad_left: 12
+                  pad_right: 12
+                  scrollable: false
+                  layout:
+                    type: FLEX
+                    flex_flow: ROW
+                    flex_align_main: SPACE_BETWEEN
+                    flex_align_cross: CENTER
+                  widgets:
+                    - label:
+                        width: ${settings_mid_width}
+                        text: "Wake word"
+                        text_align: LEFT
+                        text_color: 0xFFFFFF
+                        text_font: ${settings_label_font}
+                    - switch:
+                        id: ui_wake_word_sw
+                        width: ${settings_switch_width}
+                        height: ${settings_switch_height}
+                        state:
+                          checked: !lambda 'return id(wake_word_switch).state;'
+                        on_value:
+                          - lambda: |-
+                              if (x == id(wake_word_switch).state) return;
+                              if (x) id(wake_word_switch).turn_on();
+                              else id(wake_word_switch).turn_off();
+
+# =============================================================================
+# RUNTIME LOGIC AND ENTITIES
+# =============================================================================
+
+globals:
+  - id: voice_assistant_phase
+    type: int
+    restore_value: false
+    initial_value: ${voice_assist_not_ready_phase_id}
+
+  - id: current_mode
+    type: int
+    restore_value: no
+    initial_value: "0"
+
+  - id: previous_mode
+    type: int
+    restore_value: no
+    initial_value: "0"
+
+  - id: peer_name
+    type: std::string
+    restore_value: no
+    initial_value: '""'
+
+  # call_ended_group is shown briefly after a call terminates (hangup,
+  # decline, error, timeout). The flag is set by ui_call_ended and
+  # cleared either by the auto-return delay or by an early state
+  # change. draw_display checks it so the page is not overwritten
+  # while the user reads the reason.
+  - id: call_ended_active
+    type: bool
+    restore_value: false
+    initial_value: "false"
+
+  - id: voip_keypad_visible
+    type: bool
+    restore_value: false
+    initial_value: "false"
+
+  - id: voip_dial_buffer
+    type: std::string
+    restore_value: false
+    initial_value: '""'
+
+  # Forecast arrays (5-day)
+  - id: forecast_condition
+    type: std::array<std::string, 5>
+  - id: forecast_temp_max
+    type: float[5]
+  - id: forecast_temp_min
+    type: float[5]
+  - id: forecast_dow
+    type: int[5]
+
+  # Main dashboard geometry, computed once from the active LVGL resolution at
+  # boot and reused by draw_display. Index map:
+  #   0=screen_w, 1=screen_h, 2=margin, 3=gap, 4=panel_h
+  #   5=weather_x, 6=weather_w, 7=va_x, 8=va_w
+  #   9=right_x, 10=right_w, 11=voip_h, 12=quick_y, 13=quick_h
+  #   14=weather_text_w, 15=weather_rule_w, 16=forecast_w, 17=forecast_row_w
+  #   18=forecast_day_w, 19=forecast_icon_w, 20=forecast_temp_w
+  #   21=right_text_w, 22=right_inner_w, 23=quick_button_w, 24=quick_header_w
+  #   25=weather_pad, 26=weather_header_y, 27=weather_icon_y, 28=weather_temp_y
+  #   29=weather_condition_y, 30=weather_location_y, 31=weather_rule_y
+  #   32=weather_details_y, 33=forecast_y, 34=forecast_h
+  #   35=call_header_x, 36=call_header_y, 37=call_rule_y, 38=call_status_y
+  #   39=call_peer_y, 40=call_contacts_y, 41=call_hint_y, 42=call_swipe_y
+  #   43=call_swipe_h, 44=call_button_side_w, 45=call_button_call_w
+  #   46=call_button_side_h, 47=call_button_call_h
+  - id: main_layout
+    type: int[48]
+    restore_value: false
+    initial_value: '{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}'
+
+script:
+  # Remove package's LED-based update_led (P4 has no status_led, uses LVGL display)
+  - id: !remove update_led
+  - id: update_led
+    mode: restart
+    then:
+      - script.execute: draw_display
+
+  - id: apply_media_artwork
+    then:
+      - lambda: |-
+          // The Sendspin artwork extension performs the single final image
+          // selection; avoid an observable neutral intermediate frame.
+
+  - id: show_voip_keypad
+    mode: single
+    then:
+      - lambda: |-
+          if (!id(phone).is_idle() || id(voip_keypad_visible)) return;
+          id(voip_keypad_visible) = true;
+          const int height = id(main_layout)[11];
+          lv_obj_clear_flag(id(call_idle_group), LV_OBJ_FLAG_HIDDEN);
+          lv_obj_clear_flag(id(call_keypad_group), LV_OBJ_FLAG_HIDDEN);
+          lv_obj_set_y(id(call_idle_group), 0);
+          lv_obj_set_y(id(call_keypad_group), height);
+          lv_anim_t contacts;
+          lv_anim_init(&contacts);
+          lv_anim_set_var(&contacts, id(call_idle_group));
+          lv_anim_set_values(&contacts, 0, -height);
+          lv_anim_set_duration(&contacts, 220);
+          lv_anim_set_exec_cb(&contacts, [](void *obj, int32_t y) {
+            lv_obj_set_y(static_cast<lv_obj_t *>(obj), y);
+          });
+          lv_anim_start(&contacts);
+          lv_anim_t keypad;
+          lv_anim_init(&keypad);
+          lv_anim_set_var(&keypad, id(call_keypad_group));
+          lv_anim_set_values(&keypad, height, 0);
+          lv_anim_set_duration(&keypad, 220);
+          lv_anim_set_exec_cb(&keypad, [](void *obj, int32_t y) {
+            lv_obj_set_y(static_cast<lv_obj_t *>(obj), y);
+          });
+          lv_anim_start(&keypad);
+
+  - id: hide_voip_keypad
+    mode: single
+    then:
+      - lambda: |-
+          if (!id(voip_keypad_visible)) return;
+          id(voip_keypad_visible) = false;
+          const int height = id(main_layout)[11];
+          lv_obj_clear_flag(id(call_idle_group), LV_OBJ_FLAG_HIDDEN);
+          lv_obj_clear_flag(id(call_keypad_group), LV_OBJ_FLAG_HIDDEN);
+          lv_obj_set_y(id(call_idle_group), -height);
+          lv_obj_set_y(id(call_keypad_group), 0);
+          lv_anim_t contacts;
+          lv_anim_init(&contacts);
+          lv_anim_set_var(&contacts, id(call_idle_group));
+          lv_anim_set_values(&contacts, -height, 0);
+          lv_anim_set_duration(&contacts, 220);
+          lv_anim_set_exec_cb(&contacts, [](void *obj, int32_t y) {
+            lv_obj_set_y(static_cast<lv_obj_t *>(obj), y);
+          });
+          lv_anim_start(&contacts);
+          lv_anim_t keypad;
+          lv_anim_init(&keypad);
+          lv_anim_set_var(&keypad, id(call_keypad_group));
+          lv_anim_set_values(&keypad, 0, height);
+          lv_anim_set_duration(&keypad, 220);
+          lv_anim_set_exec_cb(&keypad, [](void *obj, int32_t y) {
+            lv_obj_set_y(static_cast<lv_obj_t *>(obj), y);
+          });
+          lv_anim_start(&keypad);
+
+  # Main dashboard layout is derived once from the active LVGL resolution during
+  # init and stored in main_layout[]. Main dashboard containers start neutral;
+  # draw_display only applies cached values computed on the initializing page.
+  - id: compute_main_layout
+    mode: single
+    then:
+      - lambda: |-
+          enum LayoutIndex {
+            SCREEN_W, SCREEN_H, PAGE_MARGIN, PANEL_GAP, PANEL_H,
+            WEATHER_X, WEATHER_W, VA_X, VA_W,
+            RIGHT_X, RIGHT_W, VOIP_H, QUICK_Y, QUICK_H,
+            WEATHER_TEXT_W, WEATHER_RULE_W, FORECAST_W, FORECAST_ROW_W,
+            FORECAST_DAY_W, FORECAST_ICON_W, FORECAST_TEMP_W,
+            RIGHT_TEXT_W, RIGHT_INNER_W, QUICK_BUTTON_W, QUICK_HEADER_W,
+            WEATHER_PAD, WEATHER_HEADER_Y, WEATHER_ICON_Y, WEATHER_TEMP_Y,
+            WEATHER_CONDITION_Y, WEATHER_LOCATION_Y, WEATHER_RULE_Y,
+            WEATHER_DETAILS_Y, FORECAST_Y, FORECAST_H,
+            CALL_HEADER_X, CALL_HEADER_Y, CALL_RULE_Y, CALL_STATUS_Y,
+            CALL_PEER_Y, CALL_CONTACTS_Y, CALL_HINT_Y, CALL_SWIPE_Y, CALL_SWIPE_H,
+            CALL_BUTTON_SIDE_W, CALL_BUTTON_CALL_W, CALL_BUTTON_SIDE_H, CALL_BUTTON_CALL_H,
+          };
+          lv_disp_t *disp = lv_disp_get_default();
+          if (disp == nullptr) {
+            return;
+          }
+          const int sw = lv_disp_get_hor_res(disp);
+          const int sh = lv_disp_get_ver_res(disp);
+          if (sw <= 0 || sh <= 0) {
+            return;
+          }
+
+          const int margin = 20;
+          const int gap = 20;
+          int panel_h = sh - (margin * 2);
+          if (panel_h < 460) panel_h = 460;
+
+          int right_w = (sw * 27) / 100;
+          if (right_w < 300) right_w = 300;
+          if (right_w > 340) right_w = 340;
+
+          int left_w = (sw * 28) / 100;
+          if (left_w < 320) left_w = 320;
+          if (left_w > 380) left_w = 380;
+
+          int center_w = sw - (margin * 2) - (gap * 2) - left_w - right_w;
+          if (center_w < 360) {
+            center_w = 360;
+            left_w = (sw - (margin * 2) - (gap * 2) - center_w - right_w);
+            if (left_w < 280) left_w = 280;
+          }
+
+          const int x0 = margin;
+          const int x1 = x0 + left_w + gap;
+          const int x2 = x1 + center_w + gap;
+
+          const int quick_h = 220;
+          const int voip_h = panel_h - gap - quick_h;
+          const int weather_text_w = left_w - 40;
+          const int weather_rule_w = left_w - 48;
+          const int forecast_w = left_w - 30;
+          const int forecast_row_w = forecast_w - 24;
+          const int forecast_icon_w = 48;
+          const int forecast_temp_w = 56;
+          int forecast_day_w = forecast_row_w - forecast_icon_w - (forecast_temp_w * 2) - 34;
+          if (forecast_day_w < 70) forecast_day_w = 70;
+
+          const int right_text_w = right_w - 40;
+          const int right_inner_w = right_w - 30;
+          int quick_button_w = (right_w - 56) / 2;
+          if (quick_button_w < 118) quick_button_w = 118;
+          if (quick_button_w > 140) quick_button_w = 140;
+          const int quick_header_w = right_w - 40;
+          const int weather_pad = 24;
+          const int weather_header_y = 20;
+          const int weather_icon_y = (panel_h * 10) / 100;
+          const int weather_temp_y = weather_icon_y + 108;
+          const int weather_condition_y = weather_temp_y + 64;
+          const int weather_location_y = weather_condition_y + 35;
+          const int weather_rule_y = weather_location_y + 41;
+          const int weather_details_y = weather_rule_y + 20;
+          const int forecast_y = weather_details_y + 52;
+          int forecast_h = panel_h - forecast_y - 26;
+          if (forecast_h < 300) forecast_h = 300;
+          const int call_header_x = 22;
+          const int call_header_y = 20;
+          const int call_rule_y = 56;
+          const int call_status_y = 82;
+          const int call_peer_y = 118;
+          int call_hint_y = voip_h - 142;
+          if (call_hint_y < 250) call_hint_y = 250;
+          int call_contacts_y = call_hint_y - 34;
+          if (call_contacts_y < 214) call_contacts_y = 214;
+          const int call_swipe_y = 80;
+          const int call_swipe_h = 170;
+          int call_button_side_w = (right_w * 23) / 100;
+          if (call_button_side_w < 72) call_button_side_w = 72;
+          if (call_button_side_w > 82) call_button_side_w = 82;
+          int call_button_call_w = (right_w * 27) / 100;
+          if (call_button_call_w < 88) call_button_call_w = 88;
+          if (call_button_call_w > 100) call_button_call_w = 100;
+          const int call_button_side_h = 64;
+          const int call_button_call_h = 78;
+          auto &layout = id(main_layout);
+          layout[SCREEN_W] = sw;
+          layout[SCREEN_H] = sh;
+          layout[PAGE_MARGIN] = margin;
+          layout[PANEL_GAP] = gap;
+          layout[PANEL_H] = panel_h;
+          layout[WEATHER_X] = x0;
+          layout[WEATHER_W] = left_w;
+          layout[VA_X] = x1;
+          layout[VA_W] = center_w;
+          layout[RIGHT_X] = x2;
+          layout[RIGHT_W] = right_w;
+          layout[VOIP_H] = voip_h;
+          layout[QUICK_Y] = margin + voip_h + gap;
+          layout[QUICK_H] = quick_h;
+          layout[WEATHER_TEXT_W] = weather_text_w;
+          layout[WEATHER_RULE_W] = weather_rule_w;
+          layout[FORECAST_W] = forecast_w;
+          layout[FORECAST_ROW_W] = forecast_row_w;
+          layout[FORECAST_DAY_W] = forecast_day_w;
+          layout[FORECAST_ICON_W] = forecast_icon_w;
+          layout[FORECAST_TEMP_W] = forecast_temp_w;
+          layout[RIGHT_TEXT_W] = right_text_w;
+          layout[RIGHT_INNER_W] = right_inner_w;
+          layout[QUICK_BUTTON_W] = quick_button_w;
+          layout[QUICK_HEADER_W] = quick_header_w;
+          layout[WEATHER_PAD] = weather_pad;
+          layout[WEATHER_HEADER_Y] = weather_header_y;
+          layout[WEATHER_ICON_Y] = weather_icon_y;
+          layout[WEATHER_TEMP_Y] = weather_temp_y;
+          layout[WEATHER_CONDITION_Y] = weather_condition_y;
+          layout[WEATHER_LOCATION_Y] = weather_location_y;
+          layout[WEATHER_RULE_Y] = weather_rule_y;
+          layout[WEATHER_DETAILS_Y] = weather_details_y;
+          layout[FORECAST_Y] = forecast_y;
+          layout[FORECAST_H] = forecast_h;
+          layout[CALL_HEADER_X] = call_header_x;
+          layout[CALL_HEADER_Y] = call_header_y;
+          layout[CALL_RULE_Y] = call_rule_y;
+          layout[CALL_STATUS_Y] = call_status_y;
+          layout[CALL_PEER_Y] = call_peer_y;
+          layout[CALL_CONTACTS_Y] = call_contacts_y;
+          layout[CALL_HINT_Y] = call_hint_y;
+          layout[CALL_SWIPE_Y] = call_swipe_y;
+          layout[CALL_SWIPE_H] = call_swipe_h;
+          layout[CALL_BUTTON_SIDE_W] = call_button_side_w;
+          layout[CALL_BUTTON_CALL_W] = call_button_call_w;
+          layout[CALL_BUTTON_SIDE_H] = call_button_side_h;
+          layout[CALL_BUTTON_CALL_H] = call_button_call_h;
+
+  - id: apply_main_layout
+    mode: restart
+    then:
+      - lambda: |-
+          enum LayoutIndex {
+            SCREEN_W, SCREEN_H, PAGE_MARGIN, PANEL_GAP, PANEL_H,
+            WEATHER_X, WEATHER_W, VA_X, VA_W,
+            RIGHT_X, RIGHT_W, VOIP_H, QUICK_Y, QUICK_H,
+            WEATHER_TEXT_W, WEATHER_RULE_W, FORECAST_W, FORECAST_ROW_W,
+            FORECAST_DAY_W, FORECAST_ICON_W, FORECAST_TEMP_W,
+            RIGHT_TEXT_W, RIGHT_INNER_W, QUICK_BUTTON_W, QUICK_HEADER_W,
+            WEATHER_PAD, WEATHER_HEADER_Y, WEATHER_ICON_Y, WEATHER_TEMP_Y,
+            WEATHER_CONDITION_Y, WEATHER_LOCATION_Y, WEATHER_RULE_Y,
+            WEATHER_DETAILS_Y, FORECAST_Y, FORECAST_H,
+            CALL_HEADER_X, CALL_HEADER_Y, CALL_RULE_Y, CALL_STATUS_Y,
+            CALL_PEER_Y, CALL_CONTACTS_Y, CALL_HINT_Y, CALL_SWIPE_Y, CALL_SWIPE_H,
+            CALL_BUTTON_SIDE_W, CALL_BUTTON_CALL_W, CALL_BUTTON_SIDE_H, CALL_BUTTON_CALL_H,
+          };
+          auto &layout = id(main_layout);
+          if (layout[SCREEN_W] <= 0 || layout[SCREEN_H] <= 0) {
+            id(compute_main_layout).execute();
+            if (layout[SCREEN_W] <= 0 || layout[SCREEN_H] <= 0) {
+              return;
+            }
+          }
+          const int y0 = layout[PAGE_MARGIN];
+
+          lv_obj_set_size(id(settings_page_wrapper), layout[SCREEN_W], layout[SCREEN_H]);
+
+          lv_obj_set_pos(id(weather_tile), layout[WEATHER_X], y0);
+          lv_obj_set_size(id(weather_tile), layout[WEATHER_W], layout[PANEL_H]);
+          lv_obj_align(id(weather_date_label), LV_ALIGN_TOP_MID, 0, layout[WEATHER_HEADER_Y]);
+          lv_obj_align(id(weather_icon_label), LV_ALIGN_TOP_MID, 0, layout[WEATHER_ICON_Y]);
+          lv_obj_align(id(weather_temp_label), LV_ALIGN_TOP_MID, 0, layout[WEATHER_TEMP_Y]);
+          lv_obj_align(id(weather_condition_label), LV_ALIGN_TOP_MID, 0, layout[WEATHER_CONDITION_Y]);
+          lv_obj_align(id(weather_location_label), LV_ALIGN_TOP_MID, 0, layout[WEATHER_LOCATION_Y]);
+          lv_obj_align(id(weather_rule), LV_ALIGN_TOP_MID, 0, layout[WEATHER_RULE_Y]);
+          lv_obj_align(id(weather_details_label), LV_ALIGN_TOP_MID, 0, layout[WEATHER_DETAILS_Y]);
+          lv_obj_align(id(forecast_container), LV_ALIGN_TOP_MID, 0, layout[FORECAST_Y]);
+          lv_obj_set_size(id(forecast_container), layout[FORECAST_W], layout[FORECAST_H]);
+          lv_obj_set_width(id(weather_date_label), layout[WEATHER_TEXT_W]);
+          lv_obj_set_width(id(weather_condition_label), layout[WEATHER_TEXT_W]);
+          lv_obj_set_width(id(weather_location_label), layout[WEATHER_TEXT_W]);
+          lv_obj_set_width(id(weather_details_label), layout[WEATHER_TEXT_W]);
+          lv_obj_set_width(id(weather_rule), layout[WEATHER_RULE_W]);
+
+          lv_obj_t *forecast_rows[] = {id(fc0_row), id(fc1_row), id(fc2_row), id(fc3_row), id(fc4_row)};
+          lv_obj_t *forecast_day_labels[] = {id(fc0_day_label), id(fc1_day_label), id(fc2_day_label),
+                                             id(fc3_day_label), id(fc4_day_label)};
+          lv_obj_t *forecast_icon_labels[] = {id(fc0_icon_label), id(fc1_icon_label), id(fc2_icon_label),
+                                              id(fc3_icon_label), id(fc4_icon_label)};
+          lv_obj_t *forecast_max_labels[] = {id(fc0_max_label), id(fc1_max_label), id(fc2_max_label),
+                                             id(fc3_max_label), id(fc4_max_label)};
+          lv_obj_t *forecast_min_labels[] = {id(fc0_min_label), id(fc1_min_label), id(fc2_min_label),
+                                             id(fc3_min_label), id(fc4_min_label)};
+          for (size_t i = 0; i < 5; i++) {
+            lv_obj_set_width(forecast_rows[i], layout[FORECAST_ROW_W]);
+            lv_obj_set_width(forecast_day_labels[i], layout[FORECAST_DAY_W]);
+            lv_obj_set_width(forecast_icon_labels[i], layout[FORECAST_ICON_W]);
+            lv_obj_set_width(forecast_max_labels[i], layout[FORECAST_TEMP_W]);
+            lv_obj_set_width(forecast_min_labels[i], layout[FORECAST_TEMP_W]);
+          }
+
+          lv_obj_set_pos(id(va_container), layout[VA_X], y0);
+          lv_obj_set_size(id(va_container), layout[VA_W], layout[PANEL_H]);
+          lv_obj_t *va_groups[] = {id(va_idle_group), id(va_listening_group), id(va_thinking_group),
+                                   id(va_replying_group), id(va_error_group), id(va_muted_group)};
+          for (auto *group : va_groups) {
+            lv_obj_set_size(group, layout[VA_W], layout[PANEL_H]);
+          }
+          lv_obj_set_width(id(thinking_text_label), layout[VA_W] - 40);
+          lv_obj_set_width(id(replying_text_label), layout[VA_W] - 40);
+
+          lv_obj_set_pos(id(voip_tile), layout[RIGHT_X], y0);
+          lv_obj_set_size(id(voip_tile), layout[RIGHT_W], layout[VOIP_H]);
+          lv_obj_t *voip_groups[] = {id(call_idle_group), id(call_keypad_group), id(call_ringing_in_group), id(call_ringing_out_group),
+                                         id(call_in_call_group), id(call_ended_group)};
+          for (auto *group : voip_groups) {
+            lv_obj_set_size(group, layout[RIGHT_W], layout[VOIP_H]);
+          }
+          lv_obj_set_width(id(call_idle_peer_label), layout[RIGHT_TEXT_W]);
+          lv_obj_align(id(call_idle_header_label), LV_ALIGN_TOP_MID, 0, layout[CALL_HEADER_Y]);
+          lv_obj_align(id(call_idle_header_rule), LV_ALIGN_TOP_MID, 0, layout[CALL_RULE_Y]);
+          lv_obj_align(id(call_keypad_header_label), LV_ALIGN_TOP_MID, 0, layout[CALL_HEADER_Y]);
+          lv_obj_align(id(call_keypad_header_rule), LV_ALIGN_TOP_MID, 0, layout[CALL_RULE_Y]);
+          lv_obj_align(id(call_idle_destination_label), LV_ALIGN_TOP_MID, 0, layout[CALL_STATUS_Y]);
+          lv_obj_align(id(call_idle_peer_label), LV_ALIGN_TOP_MID, 0, layout[CALL_PEER_Y]);
+          lv_obj_align(id(call_idle_contacts_label), LV_ALIGN_TOP_MID, 0, layout[CALL_CONTACTS_Y]);
+          lv_obj_align(id(call_idle_hint_label), LV_ALIGN_TOP_MID, 0, layout[CALL_HINT_Y]);
+          lv_obj_align(id(call_idle_swipe_area), LV_ALIGN_TOP_MID, 0, layout[CALL_SWIPE_Y]);
+          lv_obj_set_size(id(call_idle_swipe_area), layout[RIGHT_INNER_W], layout[CALL_SWIPE_H]);
+          lv_obj_align(id(call_prev_btn), LV_ALIGN_BOTTOM_LEFT, layout[CALL_HEADER_X], -30);
+          lv_obj_set_size(id(call_prev_btn), layout[CALL_BUTTON_SIDE_W], layout[CALL_BUTTON_SIDE_H]);
+          lv_obj_align(id(call_button_widget), LV_ALIGN_BOTTOM_MID, 0, -24);
+          lv_obj_set_size(id(call_button_widget), layout[CALL_BUTTON_CALL_W], layout[CALL_BUTTON_CALL_H]);
+          lv_obj_align(id(call_next_btn), LV_ALIGN_BOTTOM_RIGHT, -layout[CALL_HEADER_X], -30);
+          lv_obj_set_size(id(call_next_btn), layout[CALL_BUTTON_SIDE_W], layout[CALL_BUTTON_SIDE_H]);
+          lv_obj_set_width(id(call_keypad_value_label), layout[RIGHT_TEXT_W]);
+          lv_obj_set_width(id(call_keypad_matrix)->obj, layout[RIGHT_INNER_W]);
+          // Fill the space down to the command row while retaining a small
+          // visual gap. This follows the computed VoIP tile height instead of
+          // assuming one landscape panel resolution.
+          int keypad_h = layout[VOIP_H] - 192;
+          if (keypad_h < 128) keypad_h = 128;
+          lv_obj_set_height(id(call_keypad_matrix)->obj, keypad_h);
+          lv_obj_set_width(id(call_ringing_in_peer_label), layout[RIGHT_TEXT_W]);
+          lv_obj_set_width(id(call_ringing_out_peer_label), layout[RIGHT_TEXT_W]);
+          lv_obj_set_width(id(call_in_call_peer_label), layout[RIGHT_TEXT_W]);
+          lv_obj_set_width(id(call_ended_peer_label), layout[RIGHT_TEXT_W]);
+          lv_obj_set_width(id(call_ended_reason_label), layout[RIGHT_TEXT_W]);
+          lv_obj_set_pos(id(quick_controls_panel), layout[RIGHT_X], layout[QUICK_Y]);
+          lv_obj_set_size(id(quick_controls_panel), layout[RIGHT_W], layout[QUICK_H]);
+          lv_obj_set_width(id(quick_controls_header), layout[QUICK_HEADER_W]);
+          lv_obj_t *quick_buttons[] = {id(quick_settings_btn), id(quick_mic_mute_btn),
+                                       id(quick_speaker_mute_btn), id(quick_dnd_btn)};
+          for (auto *button : quick_buttons) {
+            lv_obj_set_width(button, layout[QUICK_BUTTON_W]);
+          }
+
+  # Display cleanup after VA ends
+  - id: !extend ui_va_end
+    then:
+      - script.execute: backlight_timer
+      - text_sensor.template.publish:
+          id: text_request
+          state: ""
+      - text_sensor.template.publish:
+          id: text_response
+          state: ""
+      - script.execute: clear_replying_text
+      - script.execute: set_idle_or_mute_phase
+      - script.execute: draw_display
+
+  # Display state routing (extends package placeholder)
+  # Maps canonical ui_state to the device-local VA phase and calls draw_display.
+  # Device-local overlays (timer, settings, call-ended) are resolved inside draw_display.
+  - id: !extend render_ui_state
+    then:
+      - script.execute: runtime_project_ui_phase
+      - script.execute: backlight_timer
+      # Reset text on listening start.
+      - if:
+          condition:
+            lambda: 'return id(ui_state) == ${ui_state_va_listening};'
+          then:
+            - text_sensor.template.publish:
+                id: text_request
+                state: "..."
+            - text_sensor.template.publish:
+                id: text_response
+                state: "..."
+      # VoIP idle: update labels if staying in call mode.
+      - if:
+          condition:
+            lambda: |-
+              return id(ui_state) == ${ui_state_idle} && id(current_mode) == 1
+                     && id(phone).is_idle();
+          then:
+            - script.execute: update_ic_idle_labels
+      - script.execute: draw_display
+
+  # TTS text display (extends package placeholder)
+  - id: !extend ui_tts_started
+    then:
+      # Parse emoticon prefix, set mood background, strip from displayed text
+      - lambda: |-
+          std::string t = text;
+          esphome::image::Image *mood = id(mood_neutral);
+          if (t.size() >= 3) {
+            std::string prefix = t.substr(0, 3);
+            if (prefix == ":-)") {
+              mood = id(mood_happy);
+            } else if (prefix == ":-(") {
+              mood = id(mood_angry);
+            } else if (prefix == ":-|") {
+              // neutral (default)
+            }
+            if (prefix == ":-)" || prefix == ":-(" || prefix == ":-|") {
+              t = t.substr(3);
+              if (!t.empty() && t[0] == ' ') t = t.substr(1);
+            }
+          }
+          if (lv_img_get_src(id(mood_bg)) != mood)
+            lv_img_set_src(id(mood_bg), mood);
+          id(text_response).publish_state(t);
+          id(runtime_visual_source) = mood == id(mood_happy) ? 2 :
+                                      mood == id(mood_angry) ? 3 : 1;
+          id(runtime_response_text_ready) = !t.empty();
+      - script.stop: backlight_timer
+      - output.set_level:
+          id: backlight_pwm
+          level: 100%
+      - if:
+          condition:
+            lambda: 'return id(ui_state) == ${ui_state_va_replying};'
+          then:
+            - script.execute: draw_display
+
+  # STT text display (extends package placeholder)
+  - id: !extend ui_stt_ended
+    then:
+      - text_sensor.template.publish:
+          id: text_request
+          state: !lambda 'return text;'
+      - script.execute: draw_display
+
+  # VoIP call display (extends package placeholder). Resets the
+  # calling-status label to "CALLING" so a fresh start() doesn't leak
+  # the "RINGING" text from a previous call.
+  - id: !extend ui_call_started
+    then:
+      - script.execute: runtime_ui_call_begin
+      - script.stop: ai_animation_loop
+      - lambda: |-
+          id(peer_name) = peer;
+      - lvgl.label.update:
+          id: call_ringing_out_status_label
+          text: "CALLING"
+      - script.execute: backlight_timer
+      - script.execute: draw_display
+
+  # Caller path: dest acked with RING. Same calling tile, label flips
+  # from "CALLING" to "RINGING".
+  - id: !extend ui_call_dest_ringing
+    then:
+      - lambda: 'id(peer_name) = peer;'
+      - lvgl.label.update:
+          id: call_ringing_out_peer_label
+          text: !lambda 'return id(peer_name);'
+      - lvgl.label.update:
+          id: call_ringing_out_status_label
+          text: "RINGING"
+      - script.execute: backlight_timer
+
+  # Call ended (hangup, decline, error, timeout). Show call_ended_group
+  # with peer + reason for ~4 s, then auto-route back to whatever the
+  # runtime display state is in now (typically Idle).
+  - id: !extend ui_call_ended
+    mode: restart
+    then:
+      - script.execute: runtime_ui_call_end
+      - globals.set:
+          id: call_ended_active
+          value: "true"
+      - lvgl.label.update:
+          id: call_ended_peer_label
+          text: !lambda |-
+            return peer.empty() ? std::string("Call ended.") : ("Call with " + peer + " ended.");
+      - lvgl.label.update:
+          id: call_ended_reason_label
+          text: !lambda |-
+            std::string r = reason;
+            std::string label;
+            if      (r == "local_hangup")    label = "Local hangup";
+            else if (r == "remote_hangup")   label = "Remote hangup";
+            else if (r == "declined")        label = "Declined";
+            else if (r == "timeout")         label = "Timeout";
+            else if (r == "busy")            label = "Busy";
+            else if (r == "unreachable")     label = "Unreachable";
+            else if (r == "protocol_error")  label = "Protocol error";
+            else if (r == "bridge_error")    label = "Bridge error";
+            else                             label = r.empty() ? std::string("Ended") : ("Declined: " + r);
+            return std::string("Reason: ") + label;
+      - script.execute: backlight_timer
+      - script.execute: draw_display
+      - delay: 4s
+      - if:
+          condition:
+            lambda: 'return id(call_ended_active);'
+          then:
+            - globals.set:
+                id: call_ended_active
+                value: "false"
+            - script.execute: draw_display
+
+  # Main display rendering: split-screen layout
+  - id: draw_display
+    mode: restart
+    then:
+      - lambda: |-
+          lv_obj_t* active_scr = lv_disp_get_scr_act(nullptr);
+
+          // Settings page is user-driven (modal): never let the periodic
+          // draw_display callers (VoIP state, idle phase, animations,
+          // weather refresh, ...) snap the screen back to main_page while
+          // the user is interacting with the settings page. A live call still
+          // interrupts it, as it already does on the round target.
+          if (active_scr == id(settings_p4_page)->obj && !id(phone).is_active()) {
+            id(runtime_rendered_page) = "settings";
+            return;
+          }
+
+          auto set_hidden = [](lv_obj_t *obj, bool hidden) {
+            const bool is_hidden = lv_obj_has_flag(obj, LV_OBJ_FLAG_HIDDEN);
+            if (hidden && !is_hidden) {
+              lv_obj_add_flag(obj, LV_OBJ_FLAG_HIDDEN);
+            } else if (!hidden && is_hidden) {
+              lv_obj_clear_flag(obj, LV_OBJ_FLAG_HIDDEN);
+            }
+          };
+          auto set_label = [](lv_obj_t *label, const char *text) {
+            if (text == nullptr) text = "";
+            const char *current = lv_label_get_text(label);
+            if (current == nullptr || strcmp(current, text) != 0)
+              lv_label_set_text(label, text);
+          };
+          auto set_quick_button = [&](lv_obj_t *btn, lv_obj_t *label, bool active,
+                                      uint32_t on_color, uint32_t off_color,
+                                      const char *on_text, const char *off_text) {
+            lv_obj_set_style_bg_color(btn, lv_color_hex(active ? on_color : off_color), LV_PART_MAIN);
+            lv_obj_set_style_border_width(btn, active ? 2 : 0, LV_PART_MAIN);
+            lv_obj_set_style_border_color(btn, lv_color_hex(active ? 0xFFFFFF : off_color), LV_PART_MAIN);
+            lv_obj_set_style_text_color(label, lv_color_hex(0xFFFFFF), LV_PART_MAIN);
+            set_label(label, active ? on_text : off_text);
+          };
+
+          // Overlay pages (full-screen, cover everything)
+          if (!wifi::global_wifi_component->is_connected()) {
+            id(runtime_rendered_page) = "no_wifi";
+            if (active_scr != id(no_wifi_page)->obj)
+              lv_disp_load_scr(id(no_wifi_page)->obj);
+            return;
+          }
+          if (id(runtime).is_activity_active("no_ha")) {
+            id(runtime_rendered_page) = "no_ha";
+            if (active_scr != id(no_ha_page)->obj)
+              lv_disp_load_scr(id(no_ha_page)->obj);
+            return;
+          }
+          int phase = id(voice_assistant_phase);
+          const int state = id(ui_state);
+          if (phase == ${voice_assist_not_ready_phase_id}) {
+            id(runtime_rendered_page) = "no_ha";
+            if (active_scr != id(no_ha_page)->obj)
+              lv_disp_load_scr(id(no_ha_page)->obj);
+            return;
+          }
+          // Timer ringing owns the full-screen overlay while the alarm is active.
+          // Use the runtime_controller timer activity instead of voice_assistant_phase because the
+          // alarm sound is played through media_player and may update the phase.
+          if (id(runtime).is_activity_active("timer_ringing")) {
+            id(runtime_rendered_page) = "timer_finished";
+            if (active_scr != id(timer_finished_page)->obj)
+              lv_disp_load_scr(id(timer_finished_page)->obj);
+            return;
+          }
+
+          // Optional media pages own the display until their profile clears
+          // this state. This prevents periodic dashboard refreshes from
+          // replacing a live video frame after its first-frame callback.
+          if (id(runtime_rendered_page) == "call_video" &&
+              id(phone).is_in_call()) {
+            return;
+          }
+
+          // Normal: show main split-screen page
+          if (active_scr != id(main_page)->obj) {
+            lv_disp_load_scr(id(main_page)->obj);
+            // Main dashboard panels are fixed-size; content must not scroll inside them.
+            lv_obj_clear_flag(id(weather_tile), LV_OBJ_FLAG_SCROLLABLE);
+            lv_obj_clear_flag(id(voip_tile), LV_OBJ_FLAG_SCROLLABLE);
+          }
+          id(apply_main_layout).execute();
+
+          set_quick_button(id(quick_mic_mute_btn), id(quick_mic_mute_label), id(mute).state,
+                           0xB91C1C, 0x2B2547, "Mic muted", "Mic mute");
+          set_quick_button(id(quick_speaker_mute_btn), id(quick_speaker_mute_label), id(speaker_mute).state,
+                           0xB91C1C, 0x15364A, "Speaker muted", "Speaker");
+          set_quick_button(id(quick_dnd_btn), id(quick_dnd_label), id(dnd_switch).state,
+                           0xB91C1C, 0x44251D, "DND on", "DND");
+
+          std::string selected_wake_word = "No wake word selected";
+          for (auto *model : id(mww).get_wake_words()) {
+            if (model != nullptr && model->is_enabled() && !model->get_wake_word().empty()) {
+              selected_wake_word = model->get_wake_word();
+              break;
+            }
+          }
+          set_label(id(va_wake_word_label), selected_wake_word.c_str());
+
+          // === Update VA container (bottom half) ===
+          // Hide all VA groups
+          set_hidden(id(va_idle_group), true);
+          set_hidden(id(va_listening_group), true);
+          set_hidden(id(va_thinking_group), true);
+          set_hidden(id(va_replying_group), true);
+          set_hidden(id(va_error_group), true);
+          set_hidden(id(va_muted_group), true);
+          // Runtime state is authoritative; the local phase only drives
+          // device-specific animation timing below.
+          if (state == ${ui_state_mww_recent} || state == ${ui_state_va_listening}) {
+            set_hidden(id(va_listening_group), false);
+          } else if (state == ${ui_state_va_thinking}) {
+            set_label(id(thinking_text_label), id(text_request).state.c_str());
+            set_hidden(id(va_thinking_group), false);
+          } else if (state == ${ui_state_va_replying} || state == ${ui_state_media}) {
+            set_label(id(replying_text_label), id(text_response).state.c_str());
+            set_hidden(id(va_replying_group), false);
+          } else if (state == ${ui_state_va_error}) {
+            set_hidden(id(va_error_group), false);
+          } else if (state == ${ui_state_both_muted} || state == ${ui_state_mic_muted}) {
+            set_hidden(id(va_muted_group), false);
+          } else {
+            set_hidden(id(va_idle_group), false);
+          }
+
+          // === Update VoIP tile (top right) ===
+          std::string call_state = id(phone).get_state_str();
+
+          // Telephone state always wins over the optional idle keypad. Cancel
+          // any in-flight card animation so ringing/calling cannot inherit an
+          // off-screen position.
+          if (call_state != "idle" && !call_state.empty()) {
+            id(voip_keypad_visible) = false;
+            lv_anim_del(id(call_idle_group), nullptr);
+            lv_anim_del(id(call_keypad_group), nullptr);
+            lv_obj_set_y(id(call_idle_group), 0);
+            lv_obj_set_y(id(call_keypad_group), id(main_layout)[11]);
+          }
+
+          set_hidden(id(call_idle_group), true);
+          set_hidden(id(call_keypad_group), true);
+          set_hidden(id(call_ringing_in_group), true);
+          set_hidden(id(call_ringing_out_group), true);
+          set_hidden(id(call_in_call_group), true);
+          set_hidden(id(call_ended_group), true);
+
+          if (id(call_ended_active) && !id(phone).is_active()) {
+            // ui_call_ended owns the tile for ~4 s after a terminated
+            // call so the user reads the reason regardless of the runtime state
+            // state already returning to IDLE.
+            set_hidden(id(call_ended_group), false);
+          } else if (call_state == "ringing") {
+            set_label(id(call_ringing_in_peer_label), id(peer_name).c_str());
+            set_hidden(id(call_ringing_in_group), false);
+          } else if (call_state == "calling" || call_state == "remote_ringing") {
+            set_label(id(call_ringing_out_peer_label), id(peer_name).c_str());
+            set_hidden(id(call_ringing_out_group), false);
+          } else if (call_state == "in_call" || call_state == "connecting") {
+            set_label(id(call_in_call_peer_label), id(peer_name).c_str());
+            set_hidden(id(call_in_call_group), false);
+          } else {
+            set_label(id(call_idle_peer_label), id(peer_name).c_str());
+            char buf[32];
+            snprintf(buf, sizeof(buf), "Contacts: %u",
+                     static_cast<unsigned>(id(phone).get_contact_count()));
+            set_label(id(call_idle_contacts_label), buf);
+            if (id(voip_keypad_visible)) {
+              lv_obj_set_y(id(call_keypad_group), 0);
+              set_hidden(id(call_keypad_group), false);
+            } else {
+              lv_obj_set_y(id(call_idle_group), 0);
+              lv_obj_set_y(id(call_keypad_group), id(main_layout)[11]);
+              set_hidden(id(call_idle_group), false);
+            }
+          }
+
+          const char *va_page =
+              (state == ${ui_state_mww_recent} || state == ${ui_state_va_listening}) ? "listening" :
+              (state == ${ui_state_va_thinking}) ? "thinking" :
+              (state == ${ui_state_va_replying} || state == ${ui_state_media}) ? "replying" :
+              (state == ${ui_state_va_error}) ? "error" :
+              (state == ${ui_state_both_muted} || state == ${ui_state_mic_muted}) ? "muted" : "idle";
+          const char *call_page = id(call_ended_active) ? "call_ended" :
+              (call_state == "ringing") ? "ringing_in" :
+              (call_state == "calling" || call_state == "remote_ringing") ? "ringing_out" :
+              (call_state == "in_call" || call_state == "connecting") ? "in_call" :
+              id(voip_keypad_visible) ? "keypad" : "contacts";
+          id(runtime_rendered_page) = std::string("main:") + va_page + ":" + call_page;
+
+
+      # Animation lifecycle
+      - if:
+          condition:
+            lambda: |-
+              std::string call_state = id(phone).get_state_str();
+              return id(runtime_rendered_page).rfind("main:idle:", 0) == 0 &&
+                     id(current_mode) == 0 &&
+                     id(voice_assistant_phase) == ${voice_assist_idle_phase_id} &&
+                     !id(init_in_progress) &&
+                     (call_state == "idle" || call_state.empty());
+          then:
+            - if:
+                condition:
+                  lambda: return !id(ai_animation_loop).is_running();
+                then:
+                  - script.execute: ai_animation_loop
+          else:
+            - script.stop: ai_animation_loop
+            - lambda: |-
+                lv_anim_del(id(idle_animation), nullptr);
+                lv_animimg_start(id(idle_animation));
+                lv_anim_del(id(idle_animation), nullptr);
+      - script.execute: update_timer_state
+
+  # Idle animation loop (play once + long pause)
+  - id: ai_animation_loop
+    mode: single
+    then:
+      - lambda: |-
+          lv_anim_del(id(idle_animation), nullptr);
+          lv_animimg_set_repeat_count(id(idle_animation), 0);
+          lv_animimg_start(id(idle_animation));
+          lv_anim_del(id(idle_animation), nullptr);
+      - while:
+          condition:
+            lambda: return true;
+          then:
+            - lvgl.animimg.start: idle_animation
+            - delay: 25s
+
+  # Weather display update
+  - id: update_weather_display
+    mode: restart
+    then:
+      - lambda: |-
+          std::string call_state = id(phone).get_state_str();
+          if (id(call_ended_active) ||
+              call_state == "ringing" ||
+              call_state == "calling" || call_state == "remote_ringing" ||
+              call_state == "in_call" || call_state == "connecting") {
+            return;
+          }
+
+          // Condition → MDI icon mapping
+          auto icon_for = [](const std::string& c) -> const char* {
+            if (c == "sunny") return "\U000F0599";
+            if (c == "clear-night") return "\U000F0594";
+            if (c == "cloudy") return "\U000F0590";
+            if (c == "partlycloudy") return "\U000F0595";
+            if (c == "fog") return "\U000F0591";
+            if (c == "rainy") return "\U000F0597";
+            if (c == "snowy") return "\U000F0598";
+            if (c == "lightning") return "\U000F0593";
+            if (c == "hail") return "\U000F0592";
+            if (c == "windy") return "\U000F059D";
+            if (c == "pouring") return "\U000F0596";
+            if (c == "snowy-rainy") return "\U000F067F";
+            if (c == "windy-variant") return "\U000F059E";
+            if (c == "lightning-rainy") return "\U000F067E";
+            if (c == "exceptional") return "\U000F0F37";
+            return "\U000F0590";
+          };
+          // Condition → English text
+          auto text_for = [](const std::string& c) -> const char* {
+            if (c == "sunny") return "Sunny";
+            if (c == "clear-night") return "Clear";
+            if (c == "cloudy") return "Cloudy";
+            if (c == "partlycloudy") return "Partly Cloudy";
+            if (c == "fog") return "Fog";
+            if (c == "rainy") return "Rain";
+            if (c == "snowy") return "Snow";
+            if (c == "lightning") return "Thunderstorm";
+            if (c == "hail") return "Hail";
+            if (c == "windy") return "Windy";
+            if (c == "pouring") return "Heavy Rain";
+            if (c == "snowy-rainy") return "Sleet";
+            if (c == "windy-variant") return "Windy";
+            if (c == "lightning-rainy") return "Thunderstorm";
+            if (c == "exceptional") return "Exceptional";
+            return "";
+          };
+          static const char* day_full[] = {"Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"};
+          static const char* day_short[] = {"Sun","Mon","Tue","Wed","Thu","Fri","Sat"};
+          static const char* month_names[] = {"January","February","March","April","May","June",
+                                              "July","August","September","October","November","December"};
+
+          // --- Header: date + clock ---
+          auto now = id(my_time).now();
+          if (now.is_valid()) {
+            char date_buf[80];
+            snprintf(date_buf, sizeof(date_buf), "%s %d %s  %02d:%02d",
+                     day_full[now.day_of_week - 1], now.day_of_month,
+                     month_names[now.month - 1],
+                     now.hour, now.minute);
+            // Keep the complete clock on one line. Abbreviate the date only
+            // when the full names exceed the available weather-panel width.
+            lv_point_t text_size;
+            lv_text_get_size(&text_size, date_buf,
+                            lv_obj_get_style_text_font(id(weather_date_label), LV_PART_MAIN),
+                            lv_obj_get_style_text_letter_space(id(weather_date_label), LV_PART_MAIN),
+                            0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+            if (text_size.x > lv_obj_get_content_width(id(weather_date_label))) {
+              snprintf(date_buf, sizeof(date_buf), "%s %d %.3s  %02d:%02d",
+                       day_short[now.day_of_week - 1], now.day_of_month,
+                       month_names[now.month - 1], now.hour, now.minute);
+            }
+            lv_label_set_text(id(weather_date_label), date_buf);
+          }
+
+
+          // --- Current weather ---
+          auto cond = id(weather_condition).state;
+          if (!cond.empty()) {
+            lv_label_set_text(id(weather_icon_label), icon_for(cond));
+            lv_label_set_text(id(weather_condition_label), text_for(cond));
+          }
+
+          if (!std::isnan(id(weather_temperature).state)) {
+            char temp[16];
+            snprintf(temp, sizeof(temp), "%.0f\u00B0", id(weather_temperature).state);
+            lv_label_set_text(id(weather_temp_label), temp);
+          }
+
+          auto loc = id(weather_location).state;
+          if (!loc.empty()) {
+            lv_label_set_text(id(weather_location_label), loc.c_str());
+          }
+
+          // Humidity + wind
+          char details[64];
+          float hum = id(weather_humidity).state;
+          float wind = id(weather_wind_speed).state;
+          if (!std::isnan(hum) && !std::isnan(wind))
+            snprintf(details, sizeof(details), "Humidity: %.0f%%  |  Wind: %.0f km/h", hum, wind);
+          else if (!std::isnan(hum))
+            snprintf(details, sizeof(details), "Humidity: %.0f%%", hum);
+          else
+            details[0] = '\0';
+          lv_label_set_text(id(weather_details_label), details);
+
+          // --- Forecast 5 days ---
+          lv_obj_t* fc_day_labels[] = {id(fc0_day_label), id(fc1_day_label), id(fc2_day_label), id(fc3_day_label), id(fc4_day_label)};
+          lv_obj_t* fc_icon_labels[] = {id(fc0_icon_label), id(fc1_icon_label), id(fc2_icon_label), id(fc3_icon_label), id(fc4_icon_label)};
+          lv_obj_t* fc_max_labels[] = {id(fc0_max_label), id(fc1_max_label), id(fc2_max_label), id(fc3_max_label), id(fc4_max_label)};
+          lv_obj_t* fc_min_labels[] = {id(fc0_min_label), id(fc1_min_label), id(fc2_min_label), id(fc3_min_label), id(fc4_min_label)};
+          for (int i = 0; i < 5; i++) {
+            int dow = id(forecast_dow)[i];
+            if (dow >= 0 && dow <= 6)
+              lv_label_set_text(fc_day_labels[i], day_full[dow]);
+            auto& fc = id(forecast_condition)[i];
+            if (!fc.empty())
+              lv_label_set_text(fc_icon_labels[i], icon_for(fc));
+            char t[16];
+            snprintf(t, sizeof(t), "%.0f\u00B0", id(forecast_temp_max)[i]);
+            lv_label_set_text(fc_max_labels[i], t);
+            snprintf(t, sizeof(t), "%.0f\u00B0", id(forecast_temp_min)[i]);
+            lv_label_set_text(fc_min_labels[i], t);
+          }
+
+  # Fetch 5-day forecast from HA
+  - id: fetch_forecast
+    mode: single
+    then:
+      - homeassistant.action:
+          action: weather.get_forecasts
+          data:
+            entity_id: ${weather_entity_id}
+            type: daily
+          capture_response: true
+          on_success:
+            - lambda: |-
+                JsonObjectConst resp = response["response"];
+                JsonObjectConst data = resp["${weather_entity_id}"];
+                JsonArrayConst forecast = data["forecast"];
+                for (int i = 0; i < 5 && i < (int)forecast.size(); i++) {
+                  JsonObjectConst day = forecast[i];
+                  id(forecast_condition)[i] = day["condition"].as<std::string>();
+                  id(forecast_temp_max)[i]  = day["temperature"]   | 0.0f;
+                  id(forecast_temp_min)[i]  = day["templow"]       | 0.0f;
+                  // Extract day of week from datetime
+                  std::string dt = day["datetime"].as<std::string>();
+                  int y, m, d;
+                  sscanf(dt.c_str(), "%d-%d-%d", &y, &m, &d);
+                  struct tm tm = {};
+                  tm.tm_year = y - 1900;
+                  tm.tm_mon = m - 1;
+                  tm.tm_mday = d;
+                  mktime(&tm);
+                  id(forecast_dow)[i] = tm.tm_wday;
+                }
+            - script.execute: update_weather_display
+
+  # Timer state update
+  - id: update_timer_state
+    then:
+      - lambda: |-
+          const auto &timers = id(va).get_timers();
+          bool any_active = false;
+          voice_assistant::Timer first_active{};
+          for (const auto &t : timers) {
+            if (t.is_active && (!any_active || t.seconds_left < first_active.seconds_left)) {
+              first_active = t;
+              any_active = true;
+            }
+          }
+          int phase = id(voice_assistant_phase);
+          bool on_supported_page = (
+            phase == ${voice_assist_idle_phase_id} ||
+            phase == ${voice_assist_listening_phase_id} ||
+            phase == ${voice_assist_thinking_phase_id} ||
+            phase == ${voice_assist_muted_phase_id}
+          );
+          if (!on_supported_page || !any_active) {
+            lv_obj_add_flag(id(timer_overlay), LV_OBJ_FLAG_HIDDEN);
+            return;
+          }
+          uint32_t sec = first_active.seconds_left;
+          lv_bar_set_value(id(timer_bar), 100, LV_ANIM_OFF);
+          char buf[16];
+          int h = sec / 3600;
+          int m = (sec / 60) % 60;
+          int s = sec % 60;
+          if (h > 0) snprintf(buf, sizeof(buf), "%02d:%02d", h, m);
+          else       snprintf(buf, sizeof(buf), "%02d:%02d", m, s);
+          lv_label_set_text(id(timer_label), buf);
+          lv_obj_clear_flag(id(timer_overlay), LV_OBJ_FLAG_HIDDEN);
+
+  # Update peer name + contacts count on the VoIP idle group.
+  # Used by next/prev_contact_button and by render_ui_state when staying idle.
+  - id: update_ic_idle_labels
+    then:
+      - lambda: id(peer_name) = id(phone).get_current_destination();
+      - lvgl.label.update:
+          id: call_idle_peer_label
+          text: !lambda 'return id(peer_name);'
+      - lvgl.label.update:
+          id: call_idle_contacts_label
+          text: !lambda |-
+            char buf[32];
+            snprintf(
+                buf, sizeof(buf), "Contacts: %u",
+                static_cast<unsigned>(id(phone).get_contact_count()));
+            return std::string(buf);
+
+  # VA end handler (mode: restart ensures barge-in cancels previous on_end)
+  - id: backlight_timer
+    mode: restart
+    then:
+      - output.set_level:
+          id: backlight_pwm
+          level: 100%
+      - delay: 60s
+      - output.set_level:
+          id: backlight_pwm
+          level: 60%
+      - delay: 120s
+      - output.set_level:
+          id: backlight_pwm
+          level: 20%
+
+binary_sensor:
+  - platform: gpio
+    name: Boot Button
+    id: boot_button
+    pin:
+      number: ${boot_button_pin}
+      inverted: true
+      mode:
+        input: true
+        pullup: true
+    on_multi_click:
+      # Single click: toggle VA or stop timer
+      - timing:
+          - ON for at most 500ms
+          - OFF for at least 400ms
+        then:
+          - if:
+              condition:
+                runtime_controller.is_active:
+                  id: runtime
+                  activity: timer_ringing
+              then:
+                - runtime_controller.event:
+                    id: runtime
+                    event: timer_stopped
+              else:
+                - runtime_controller.event:
+                    id: runtime
+                    event: manual_voice_toggle
+      # Long press: toggle mute
+      - timing:
+          - ON for 1s to 3s
+          - OFF for at least 300ms
+        then:
+          - switch.toggle: mute
+
+sensor:
+  - platform: homeassistant
+    id: weather_temperature
+    entity_id: ${weather_entity_id}
+    attribute: temperature
+    internal: true
+    on_value:
+      - script.execute: update_weather_display
+
+  - platform: homeassistant
+    id: weather_humidity
+    entity_id: ${weather_entity_id}
+    attribute: humidity
+    internal: true
+
+  - platform: homeassistant
+    id: weather_wind_speed
+    entity_id: ${weather_entity_id}
+    attribute: wind_speed
+    internal: true
+
+text_sensor:
+  - id: text_request
+    platform: template
+
+  - id: text_response
+    platform: template
+
+  - platform: homeassistant
+    id: weather_condition
+    entity_id: ${weather_entity_id}
+    internal: true
+    on_value:
+      - script.execute: update_weather_display
+
+  - platform: homeassistant
+    id: weather_location
+    entity_id: ${weather_entity_id}
+    attribute: friendly_name
+    internal: true
+
+switch:
+  # Replace package mic mute; speaker mute is device-specific.
+  - id: !remove mute
+
+  # Mic Mute (device override): uses mic_afe, adds display updates
+  - platform: template
+    name: Mic Mute
+    id: mute
+    icon: "mdi:microphone-off"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    entity_category: config
+    on_turn_on:
+      - logger.log:
+          level: INFO
+          tag: mute
+          format: "Mic mute ON: microphone silenced, MWW stopped"
+      - voice_assistant.stop:
+      - micro_wake_word.stop:
+      - microphone.mute: mic_afe
+    on_turn_off:
+      - logger.log:
+          level: INFO
+          tag: mute
+          format: "Mic mute OFF: microphone active, MWW started"
+      - microphone.unmute: mic_afe
+      - if:
+          condition:
+            not:
+              micro_wake_word.is_running:
+          then:
+            - script.execute: start_mww_when_ready
+      - script.execute: draw_display
+
+  # Speaker Mute (device override): adds amp enable/disable
+  - platform: template
+    name: Speaker Mute
+    id: speaker_mute
+    icon: mdi:volume-off
+    entity_category: config
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    on_turn_on:
+      - logger.log:
+          level: INFO
+          tag: mute
+          format: "Speaker mute ON: DAC muted, amplifier off"
+      - speaker.mute_on: hw_speaker
+      - delay: 50ms
+      - output.turn_off: speaker_enable
+    on_turn_off:
+      - logger.log:
+          level: INFO
+          tag: mute
+          format: "Speaker mute OFF: amplifier on, DAC unmuted"
+      - if:
+          condition:
+            speaker.is_playing: hw_speaker
+          then:
+            - output.turn_on: speaker_enable
+            - delay: 50ms
+      - speaker.mute_off: hw_speaker
+
+# Select Entities
+# =============================================================================
+
+select:
+  - platform: template
+    name: AEC Mode
+    id: aec_mode_select
+    icon: mdi:tune-vertical
+    # FD is the P4 profile. Keep the Espressif rate-conversion backend fixed
+    # for this target so this select only changes the AFE mode.
+    options:
+      - "fd_low_cost"
+      - "fd_high_perf"
+    initial_option: "fd_high_perf"
+    # Non-optimistic: template_select::control runs the set_action first
+    # and only auto-publishes `index` when optimistic=true, overwriting
+    # whatever we published. With optimistic=false, the final lambda
+    # publish_state drives HA state from the live esp_afe mode.
+    optimistic: false
+    restore_value: false
+    set_action:
+      - if:
+          condition:
+            lambda: |-
+              return !id(init_in_progress) && x != id(afe_processor).get_mode_name();
+          then:
+            - if:
+                condition:
+                  or:
+                    - voice_assistant.is_running:
+                    - not:
+                        voip_stack.is_idle:
+                then:
+                  - logger.log:
+                      level: WARN
+                      format: "Cannot switch AEC mode during active VA/VoIP"
+                else:
+                  - logger.log:
+                      format: "Switching AEC mode to %s"
+                      args: ['x.c_str()']
+                  - micro_wake_word.stop:
+                  - esp_audio_stack.stop:
+                  - wait_until:
+                      condition:
+                        esp_audio_stack.is_idle:
+                      timeout: 2s
+                  - esp_afe.set_mode:
+                      id: afe_processor
+                      mode: !lambda 'return x;'
+                  - wait_until:
+                      condition:
+                        lambda: 'return id(afe_processor).is_reconfigure_idle();'
+                      timeout: 20s
+                  - if:
+                      condition:
+                        lambda: 'return id(afe_processor).is_reconfigure_idle() && id(afe_processor).get_last_reconfigure_ok();'
+                      then:
+                        - esp_audio_stack.start:
+                        - delay: 300ms
+                        - if:
+                            condition:
+                              switch.is_off: mute
+                            then:
+                              - script.execute: start_mww_when_ready
+                      else:
+                        - logger.log:
+                            level: ERROR
+                            tag: main
+                            format: "AFE mode switch did not complete cleanly; audio restart skipped"
+      # Reflect actual live mode (covers rejection and silent hardware mode).
+      - lambda: |-
+          id(aec_mode_select).publish_state(id(afe_processor).get_mode_name());
+
+interval:
+  # Update weather display + clocks every 30s
+  - interval: 30s
+    then:
+      - if:
+          condition:
+            lambda: return !id(init_in_progress);
+          then:
+            - script.execute: update_weather_display
+
+  # Fetch forecast every 5 min
+  - interval: 5min
+    then:
+      - if:
+          condition:
+            and:
+              - api.connected:
+              - lambda: |-
+                  std::string call_state = id(phone).get_state_str();
+                  return !id(init_in_progress) &&
+                         !id(call_ended_active) &&
+                         (call_state == "idle" || call_state.empty());
+          then:
+            - script.execute: fetch_forecast
