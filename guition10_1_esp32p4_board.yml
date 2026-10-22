@@ -129,7 +129,7 @@ substitutions:
   # Daily energy meter (resets at midnight); its daily maximum is the 11:59 pm
   # reading. The Electricity bars show the last 14 days of it.
   energy_daily_entity: sensor.powerpal_daily_energy
-  power_max_w: "5000"                         # full ring = 6 kW
+  power_max_w: "6000"                         # full ring = 6 kW
   temp_living_entity: sensor.broadlink_livingroom_temperature
   temp_bedroom_entity: sensor.temp_bathroom_main_main_bathroom_temperature
   temp_outdoor_entity: sensor.bathroom_temp_and_humidity_temperature
@@ -2226,7 +2226,7 @@ lvgl:
                               scrollable: false
                               widgets:
                                 - obj: {align: LEFT_MID, x: 8, width: 9, height: 9, radius: 5, border_width: 0, bg_color: 0x1FDC8A}
-                                - label: {align: LEFT_MID, x: 26, text: "Front Door", text_font: font_small}
+                                - label: {align: LEFT_MID, x: 26, text: "Front Door", text_font: font_small, text_color: 0xFFFFFF}
                     - obj:          # Driveway
                         id: cam_driveway
                         x: 345
@@ -2252,7 +2252,7 @@ lvgl:
                               scrollable: false
                               widgets:
                                 - obj: {align: LEFT_MID, x: 8, width: 9, height: 9, radius: 5, border_width: 0, bg_color: 0x1FDC8A}
-                                - label: {align: LEFT_MID, x: 26, text: "Driveway", text_font: font_small}
+                                - label: {align: LEFT_MID, x: 26, text: "Driveway", text_font: font_small, text_color: 0xFFFFFF}
 
         # =====================================================================
         # 9. SCENES                          col 8 span 5 | row 12 span 5
@@ -2760,6 +2760,29 @@ lvgl:
                               if (x == id(agc_switch).state) return;
                               if (x) id(agc_switch).turn_on();
                               else id(agc_switch).turn_off();
+
+        # Back to home (top left). Declared after the wrapper so it sits on
+        # top of the scrolling settings list.
+        - button:
+            id: settings_back_btn
+            align: TOP_LEFT
+            x: 8
+            y: 8
+            width: 20
+            height: 15
+            radius: 4
+            pad_all: 0
+            bg_color: 0x4A3DF0
+            border_width: 0
+            shadow_width: 0
+            on_click:
+              - script.execute: close_settings_page
+            widgets:
+              - label:
+                  align: CENTER
+                  text: "<"
+                  text_font: font_small
+                  text_color: 0xFFFFFF
 
     # ==================================================================
     # VIDEO CALL: p4_video_renderer draws the remote picture directly into
