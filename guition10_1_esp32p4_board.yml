@@ -16,10 +16,13 @@
 #     -> mic_afe -> VoIP TX
 #
 # PLAYBACK:
-#   [ringtone file] -> ringtone_player -> ringtone_speaker_input (resampler) -+
-#   [VoIP RX] ----------------------------> voip_speaker_input (resampler) ---+
-#                                         audio_mixer 48 kHz mono -> hw_speaker
-#                                         -> ES8311 -> NS4150 -> speaker
+#   [HA media] ----------> speaker_player -> media_speaker_input --------+
+#   [HA TTS, ringtone] --> speaker_player -> announcement_speaker_input -+
+#   [VoIP RX] -----------------------------> voip_speaker_input ---------+
+#                       (resamplers) -> audio_mixer 48 kHz mono -> hw_speaker
+#                                     -> ES8311 -> NS4150 amp -> speaker
+#   The NS4150 amp (PA_CTRL) is only on during calls, ringing or playback;
+#   speaker_amp_update switches it.
 #
 # Hardware [GUITION JC8012P4A1]:
 #   - ESP32-P4 (16MB flash, 32MB hex PSRAM), ESP32-C6 Wi-Fi over SDIO
@@ -45,11 +48,11 @@ substitutions:
   voip_stack_components_source: "github://n-IA-hane/esphome-voip-stack@main"
   audio_stack_components_source: "github://n-IA-hane/esphome-audio-stack@main"
   assets_base: "https://github.com/n-IA-hane/esphome-intercom/raw/main/"
+  images_base: "https://raw.githubusercontent.com/chickymonkey/guition-10.1-inch-esp32-p4/main/images/"
 
   # [GUITION] ES8311 ADC PGA sets hardware gain; this is the post-AFE user trim.
   mic_gain_min: "-20"
   mic_gain_max: "30"
-  audio_stack_speaker_idle_delay: 30s
 
   # Settings page widths for the 1280x800 landscape display.
   settings_row_width: "1180"
@@ -63,14 +66,15 @@ substitutions:
   settings_label_font: font_body
 
   # [GUITION] SIP video for packages/voip/p4_video_jpeg.yaml. The OV02C10 runs
-  # 1920x1080; the camera only downscales in exact 1/16 steps, so 960x540 (1/2).
-  p4_video_width: "960"
-  p4_video_height: "540"
+  # 1920x1080; the camera only downscales in exact 1/16 steps: 960x540 (8/16),
+  # 1200x675 (10/16), 1440x810 (12/16). 1200x675 is used.
+  p4_video_width: "1200"
+  p4_video_height: "675"
   p4_video_fps: "10"
   p4_camera_rotation: "0"
   p4_jpeg_quality: "10"
-  p4_video_max_decode_width: "960"
-  p4_video_max_decode_height: "960"
+  p4_video_max_decode_width: "1200"
+  p4_video_max_decode_height: "1200"
 
   # ---------------------------------------------------------------------------
   # Pinout: ESP32-C6 hosted Wi-Fi SDIO link
@@ -111,22 +115,37 @@ substitutions:
   # ---------------------------------------------------------------------------
   heater_entity: climate.rinnai_touch
   front_lock_entity: lock.frontdoor_aqara
-  garage_entity: cover.garage_roller_door_garage_door_virtual
+  # Garage roller door: position + status sensors, the controller's "next
+  # action" flags and its Up / Stop / Down buttons (same as the HA card).
+  garage_position_entity: sensor.garage_roller_door_garage_position
+  garage_status_entity: binary_sensor.garage_roller_door_garage_door_status
+  garage_next_up_entity: binary_sensor.garage_roller_door_garage_next_is_up
+  garage_next_stop_entity: binary_sensor.garage_roller_door_garage_next_is_stop
+  garage_next_down_entity: binary_sensor.garage_roller_door_garage_next_is_down
+  garage_up_button: button.garage_roller_door_garage_up
+  garage_stop_button: button.garage_roller_door_garage_stop
+  garage_down_button: button.garage_roller_door_garage_down
   power_entity: sensor.powerpal_real_time_power             # in W
+  # Daily energy meter (resets at midnight); its daily maximum is the 11:59 pm
+  # reading. The Electricity bars show the last 14 days of it.
+  energy_daily_entity: sensor.powerpal_daily_energy
   power_max_w: "5000"                         # full ring = 6 kW
-  temp_living_entity: sensor.living_room_temperature
-  temp_bedroom_entity: sensor.bedroom_temperature
-  temp_outdoor_entity: sensor.outdoor_temperature
-  humidity_entity: sensor.living_room_humidity
+  temp_living_entity: sensor.broadlink_livingroom_temperature
+  temp_bedroom_entity: sensor.temp_bathroom_main_main_bathroom_temperature
+  temp_outdoor_entity: sensor.bathroom_temp_and_humidity_temperature
+  humidity_entity: sensor.temp_bathroom_main_main_bathroom_humidity
   scene_home_entity: scene.back_home
   scene_night_entity: scene.sleep
-  scene_garden_entity: scene.movie_night
+  scene_movie_entity: scene.movie_night
 
 # Shared packages: P4 base/hosted Wi-Fi, VoIP transport and settings, JPEG
 # video path, audio controls and the ringtone playback components.
 packages:
   p4_base: github://n-IA-hane/esphome-intercom/packages/platform/esp32p4_base.yaml@main
   p4_c6_sdio: github://n-IA-hane/esphome-intercom/packages/board/esp32p4_c6_sdio.yaml@main
+  # ESP32-C6 co-processor firmware update entity (esp32_c6_coprocessor_update);
+  # the status bar shows its installed version.
+  p4_c6_update: github://n-IA-hane/esphome-intercom/packages/board/esp32p4_c6_update.yaml@main
   p4_diagnostics: github://n-IA-hane/esphome-intercom/packages/diagnostics/native_no_wifi_signal.yaml@main
   lvgl_p4_ppa: github://n-IA-hane/esphome-intercom/packages/lvgl/p4_ppa.yaml@main
   voip_transport: github://n-IA-hane/esphome-intercom/packages/voip/transport.yaml@main
@@ -137,9 +156,11 @@ packages:
   # Writes the HA media route into p4_call_media_route_label / p4_video_media_route_label.
   call_media_route: github://n-IA-hane/esphome-intercom/packages/lvgl/p4_call_media_route.yaml@main
   audio_stack_controls: github://n-IA-hane/esphome-intercom/packages/esp_audio_stack/controls.yaml@main
-  speaker_power: github://n-IA-hane/esphome-intercom/packages/esp_audio_stack/speaker_power_output.yaml@main
-  # Ringtone only: mixer + speaker_source components and the FLAC decoder.
+  # Speaker media player: mixer + speaker_source components and the FLAC
+  # (HA's preferred format), MP3 and WAV decoders. The amplifier is switched by
+  # speaker_amp_update, not by the speaker_power_output package.
   playback_compat: github://n-IA-hane/esphome-intercom/packages/media_player/playback_compat.yaml@main
+  http_media_codecs: github://n-IA-hane/esphome-intercom/packages/audio/http_media_codecs.yaml@main
   flac_codecs_psram: github://n-IA-hane/esphome-intercom/packages/audio/flac_codecs_psram.yaml@main
 
 # =============================================================================
@@ -161,6 +182,8 @@ esphome:
             id: backlight_pwm
             level: 100%
         - script.execute: backlight_timer
+        # Amp off until a call, ring or playback needs it (idle amp = hiss/squeal).
+        - output.turn_off: speaker_enable
 
 psram:
   mode: hex
@@ -265,6 +288,9 @@ api:
   reboot_timeout: 15min
   on_client_connected:
     - script.execute: update_call_tile
+    - script.execute: update_status_bar
+    - delay: 5s
+    - script.execute: fetch_energy_history
 
 # OTA pauses audio, VoIP and LVGL so the flash write has the bus to itself.
 ota:
@@ -314,6 +340,13 @@ time:
   - platform: homeassistant
     id: my_time
     timezone: Australia/Sydney
+    on_time:
+      # Just after midnight yesterday's total is final: refresh the 14 bars.
+      - seconds: 0
+        minutes: 5
+        hours: 0
+        then:
+          - script.execute: fetch_energy_history
 #    servers:
 #      - 0.pool.ntp.org
 
@@ -432,14 +465,17 @@ speaker:
     timeout: 1s
     buffer_duration: 128ms
 
-  # 2-source mixer: ringtone + VoIP
+  # 3-source mixer: media + announcements/ringtone + VoIP
   - platform: mixer
     id: audio_mixer
     output_speaker: hw_speaker
     num_channels: 1
     task_stack_in_psram: true
     source_speakers:
-      - id: ringtone_mixer_input
+      - id: media_mixer_input        # HA media (music, radio)
+        timeout: 10s
+        buffer_duration: 100ms
+      - id: announcement_mixer_input # HA TTS/announcements and the ringtone
         timeout: 10s
         buffer_duration: 100ms
       - id: voip_mixer_input
@@ -447,8 +483,13 @@ speaker:
         buffer_duration: 128ms
 
   - platform: resampler
-    id: ringtone_speaker_input
-    output_speaker: ringtone_mixer_input
+    id: media_speaker_input
+    output_speaker: media_mixer_input
+    task_stack_in_psram: true
+
+  - platform: resampler
+    id: announcement_speaker_input
+    output_speaker: announcement_mixer_input
     task_stack_in_psram: true
 
   - platform: resampler
@@ -463,23 +504,52 @@ audio_file:
     file: ${assets_base}assets/sounds/ringtone.flac
 
 media_source:
+  - platform: audio_http
+    id: media_http_source
+    buffer_size: 65536
+    task_stack_in_psram: true
+  - platform: audio_http
+    id: announcement_http_source
+    buffer_size: 65536
+    task_stack_in_psram: true
   - platform: audio_file
     id: ringtone_file_source
     task_stack_in_psram: true
 
+# "Speaker" media player in Home Assistant: media, TTS and announcements. The
+# ringtone also plays through its announcement pipeline. Volume here is the
+# software layer; Master Volume drives the ES8311 DAC.
 media_player:
   - platform: speaker_source
-    id: ringtone_player
-    name: Ringtone
-    internal: true
+    id: speaker_player
+    name: Speaker
     volume_initial: 100%
-    announcement_pipeline:
+    volume_min: 0%
+    volume_max: 100%
+    volume_increment: 5%
+    media_pipeline:
       num_channels: 1
-      speaker: ringtone_speaker_input
+      speaker: media_speaker_input
       format: FLAC
       sample_rate: 48000
       sources:
+        - media_http_source
+    announcement_pipeline:
+      num_channels: 1
+      speaker: announcement_speaker_input
+      format: FLAC
+      sample_rate: 48000
+      sources:
+        - announcement_http_source
         - ringtone_file_source
+    on_play:
+      - script.execute: speaker_amp_update
+    on_announcement:
+      - script.execute: speaker_amp_update
+    on_pause:
+      - script.execute: speaker_amp_update
+    on_idle:
+      - script.execute: speaker_amp_update
 
 # =============================================================================
 # VOIP
@@ -537,6 +607,7 @@ voip_stack:
         text: "CALLING"
     - script.execute: backlight_timer
     - script.execute: update_call_tile
+    - script.execute: speaker_amp_update
 
   on_dest_ringing:
     - lambda: id(peer_name) = peer;
@@ -549,16 +620,19 @@ voip_stack:
     - lambda: id(peer_name) = peer;
     - script.execute: backlight_timer
     - script.execute: show_phone_page
+    - script.execute: speaker_amp_update
     - script.execute: voip_start_ringtone
 
   on_in_call:
     - lambda: id(peer_name) = peer;
     - script.execute: voip_stop_ringtone
     - script.execute: update_call_tile
+    - script.execute: speaker_amp_update
 
   on_idle:
     - script.execute: voip_stop_ringtone
     - script.execute: show_phone_page
+    - script.execute: speaker_amp_update
 
   on_hangup:
     - script.execute: voip_stop_ringtone
@@ -615,6 +689,7 @@ font:
       family: Noto Sans
       weight: 700
     id: font_title
+    bpp: 4             # anti-aliased (default 1 bpp is jagged)
     size: 32
     glyphsets: [GF_Latin_Core]
 
@@ -623,6 +698,7 @@ font:
       family: Noto Sans
       weight: 400
     id: font_body
+    bpp: 4             # anti-aliased (default 1 bpp is jagged)
     size: 22
     glyphsets: [GF_Latin_Core]
 
@@ -631,19 +707,29 @@ font:
       family: Noto Sans
       weight: 400
     id: font_small
+    bpp: 4             # anti-aliased (default 1 bpp is jagged)
     size: 16
     glyphsets: [GF_Latin_Core]
-
+  - file:
+      type: gfonts
+      family: Noto Sans
+      weight: 500
+    id: font_small_18
+    bpp: 4             # anti-aliased (default 1 bpp is jagged)
+    size: 18
+    glyphsets: [GF_Latin_Core]
   - file:
       type: gfonts
       family: Noto Sans
       weight: 500
     id: font_ui_medium
+    bpp: 4             # anti-aliased (default 1 bpp is jagged)
     size: 24
     glyphsets: [GF_Latin_Core]
 
   - file: "https://raw.githubusercontent.com/Templarian/MaterialDesign-Webfont/master/fonts/materialdesignicons-webfont.ttf"
     id: font_action_icon
+    bpp: 4             # anti-aliased (default 1 bpp is jagged)
     size: 34
     glyphs:
       - "\U000F0141"  # mdi:chevron-left
@@ -656,11 +742,13 @@ font:
       family: Noto Sans
       weight: 600
     id: font_clock_big
+    bpp: 4             # anti-aliased (default 1 bpp is jagged)
     size: 88
     glyphs: "0123456789:-"
 
   - file: "https://raw.githubusercontent.com/Templarian/MaterialDesign-Webfont/master/fonts/materialdesignicons-webfont.ttf"
     id: font_mdi_24
+    bpp: 4             # anti-aliased (default 1 bpp is jagged)
     size: 24
     glyphs:
       - "\U000F0238"  # fire
@@ -685,9 +773,17 @@ font:
       - "\U000F02DC"  # home
       - "\U000F03F2"  # phone
       - "\U000F0493"  # cog
+      - "\U000F091F"  # wifi-strength-1
+      - "\U000F0922"  # wifi-strength-2
+      - "\U000F0925"  # wifi-strength-3
+      - "\U000F0928"  # wifi-strength-4
+      - "\U000F092F"  # wifi-strength-outline
+      - "\U000F05AA"  # wifi-off
+      - "\U000F061A"  # chip
 
   - file: "https://raw.githubusercontent.com/Templarian/MaterialDesign-Webfont/master/fonts/materialdesignicons-webfont.ttf"
     id: font_mdi_36
+    bpp: 4             # anti-aliased (default 1 bpp is jagged)
     size: 36
     glyphs:
       - "\U000F0238"
@@ -710,7 +806,30 @@ font:
       - "\U000F0594"
       - "\U000F032A"
       - "\U000F02DC"
+      - "\U000F0FCE"  # movie-open
+      - "\U000F0737"  # arrow-up-bold
+      - "\U000F0666"  # stop-circle
+      - "\U000F072E"  # arrow-down-bold
 
+# Card photos, from this repo's images/ folder (transparent PNG backgrounds).
+# resize keeps the aspect ratio and fits inside the given box.
+image:
+  # Front door lock card background: card height 232 px, sides cropped.
+  - platform: file
+    file: ${images_base}smart_lock.png
+    id: img_smart_lock
+    resize: 154x232
+    type: RGB565
+    transparency: alpha_channel
+    byte_order: little_endian
+  # Intercom card door-station photo, fitted to the 130x174 slot.
+  - platform: file
+    file: ${images_base}smart_intercom_panel.png
+    id: img_intercom_panel
+    resize: 130x174
+    type: RGB565
+    transparency: alpha_channel
+    byte_order: little_endian
 
 lvgl:
   displays:
@@ -720,7 +839,7 @@ lvgl:
   color_depth: 16
   byte_order: little_endian
   log_level: WARN
-  rotation: 270
+  rotation: 90
   on_boot:
     # p4_video_renderer draws decoded call video straight into this container.
     - lambda: id(p4_video).attach_video_container(id(call_video_surface));
@@ -769,10 +888,21 @@ lvgl:
       pad_all: 0
     - id: ebar
       width: 12
+      height: 4
       radius: 2
       border_width: 0
       bg_color: 0x2F6BFF
       bg_grad_color: 0x8A4DFF
+      bg_grad_dir: VER
+    # One slat of the garage roller-door curtain
+    - id: garage_slat
+      width: 100%
+      height: 8
+      radius: 1
+      border_width: 0
+      pad_all: 0
+      bg_color: 0x6B7588
+      bg_grad_color: 0x4A5366
       bg_grad_dir: VER
 
   pages:
@@ -781,8 +911,11 @@ lvgl:
       # because pad_row/pad_column are only accepted inside layout:.
       layout:
         type: grid
-        grid_rows: [FR(1), FR(1), FR(1), FR(1), FR(1), FR(1), FR(1), FR(1), FR(1),
-                    FR(1), FR(1), FR(1), FR(1), FR(1), FR(1), FR(1), FR(1), FR(1)]
+        # Row weights are in 1/60 of a base row: rows 1-5 (clock row) are 66 so
+        # that row is half a base row taller; rows 6-11 (intercom row) are 55 so
+        # it is half a base row shorter. The other rows keep the base 60.
+        grid_rows: [FR(60), FR(66), FR(66), FR(66), FR(66), FR(66), FR(55), FR(55), FR(55),
+                    FR(55), FR(55), FR(55), FR(60), FR(60), FR(60), FR(60), FR(60), FR(60)]
         grid_columns: [FR(1), FR(1), FR(1), FR(1), FR(1), FR(1), FR(1),
                        FR(1), FR(1), FR(1), FR(1), FR(1), FR(1)]
         pad_row: 0
@@ -797,7 +930,51 @@ lvgl:
             animation: MOVE_TOP
             time: 250ms
       widgets:
-        # ---- row 0: header goes here later ------------------------------------
+        # =====================================================================
+        # STATUS (top right): ESP32-C6 firmware + Wi-Fi  col 8 span 5 | row 0
+        # update_status_bar refreshes it every 10 s.
+        # =====================================================================
+        - obj:
+            styles: cell_style
+            scrollable: false
+            grid_cell_column_pos: 8
+            grid_cell_row_pos: 0
+            grid_cell_column_span: 5
+            grid_cell_row_span: 1
+            grid_cell_x_align: STRETCH
+            grid_cell_y_align: STRETCH
+            layout:
+              type: flex
+              flex_flow: ROW
+              flex_align_main: END
+              flex_align_cross: CENTER
+              pad_column: 8
+            widgets:
+              - label:
+                  id: status_c6_icon
+                  text: "\U000F061A"
+                  text_font: font_mdi_24
+                  text_color: 0x8A94A6
+              - label:
+                  id: status_c6_label
+                  text: "C6 --"
+                  text_font: font_small
+                  text_color: 0xAAB8EE
+              - obj:          # spacer
+                  width: 10
+                  height: 1
+                  bg_opa: TRANSP
+                  border_width: 0
+              - label:
+                  id: status_wifi_icon
+                  text: "\U000F05AA"
+                  text_font: font_mdi_24
+                  text_color: 0x8A94A6
+              - label:
+                  id: status_wifi_label
+                  text: "--"
+                  text_font: font_small
+                  text_color: 0xAAB8EE
 
         # =====================================================================
         # SIDEBAR                            col 0 span 1 | row 1 span 16
@@ -827,7 +1004,7 @@ lvgl:
                   border_color: 0x7B66FF
                   widgets:
                     - label: {align: TOP_MID, y: 14, text: "\U000F02DC", text_font: font_mdi_24, text_color: 0xFFFFFF}
-                    - label: {align: BOTTOM_MID, y: -12, text: "Home", text_font: font_small}
+                    - label: {align: BOTTOM_MID, y: -2, text: "Home", text_font: font_small}
               - button:
                   id: nav_settings_btn
                   styles: scene_btn
@@ -840,7 +1017,7 @@ lvgl:
                         time: 250ms
                   widgets:
                     - label: {align: TOP_MID, y: 14, text: "\U000F0493", text_font: font_mdi_24, text_color: 0xE8EDFF}
-                    - label: {align: BOTTOM_MID, y: -12, text: "Settings", text_font: font_small}
+                    - label: {align: BOTTOM_MID, y: -2, text: "Settings", text_font: font_small}
 
         # =====================================================================
         # 1. WALLPAPER / DIGITAL CLOCK       col 1 span 4 | row 1 span 5
@@ -1051,14 +1228,15 @@ lvgl:
                                 - label: {align: CENTER, text: "Auto", text_font: font_small}
 
         # =====================================================================
-        # 3. FRONT DOOR LOCK                 col 9 span 2 | row 1 span 5
+        # 3. FRONT DOOR LOCK                 col 9 span 1 | row 1 span 5
+        #    (col 10 is free for another card)
         # =====================================================================
         - obj:
             styles: cell_style
             scrollable: false
             grid_cell_column_pos: 9
             grid_cell_row_pos: 1
-            grid_cell_column_span: 2
+            grid_cell_column_span: 1
             grid_cell_row_span: 5
             grid_cell_x_align: STRETCH
             grid_cell_y_align: STRETCH
@@ -1069,34 +1247,25 @@ lvgl:
                   width: 100%
                   height: 100%
                   scrollable: false
+                  clip_corner: true
                   widgets:
+                    # Background: lock photo scaled to the card height (about
+                    # 86x232) and centred, so the sides are cropped.
+                    - image:
+                        src: img_smart_lock
+                        align: CENTER
                     - label:
                         id: front_lock_icon
                         styles: icon_24
                         text_color: 0x27D98D
-                        x: 12
-                        y: 10
+                        x: 8
+                        y: 8
                         text: "\U000F033E"
-                    - label:
-                        x: 44
-                        y: 12
-                        text: "Front Door Lock"
-                        text_font: font_small
-                    - obj:          # lock picture placeholder
-                        x: 24
-                        y: 58
-                        width: 46
-                        height: 110
-                        radius: 8
-                        bg_color: 0x1E1E24
-                        border_color: 0x3A3A42
-                        border_width: 2
                     - button:
                         id: front_lock_btn
                         styles: round_btn
-                        align: BOTTOM_RIGHT
-                        x: -14
-                        y: -22
+                        align: BOTTOM_MID
+                        y: -12
                         width: 48
                         height: 48
                         bg_color: 0x7A2A2A          # unlocked
@@ -1156,8 +1325,9 @@ lvgl:
                         y: 12
                         text: "Garage Door"
                         text_font: font_small
-                    - obj:          # garage picture placeholder
+                    - obj:          # door position: percentage + bar
                         align: TOP_MID
+                        id: garage_position_container
                         y: 52
                         width: 150
                         height: 110
@@ -1165,25 +1335,84 @@ lvgl:
                         bg_color: 0x2C3340
                         border_color: 0x3A4352
                         border_width: 2
+                        pad_all: 0
+                        scrollable: false
+                        widgets:
+                          # Roller-door curtain: horizontal slats from the top,
+                          # height = closed share of the door (100 - position %).
+                          # Slats stay at the bottom edge, so a shorter curtain
+                          # looks like the door rolling up. The container clips it.
+                          - obj:
+                              id: garage_door_curtain
+                              align: TOP_MID
+                              width: 100%
+                              height: 100%
+                              bg_opa: TRANSP
+                              border_width: 0
+                              radius: 0
+                              pad_all: 0
+                              scrollable: false
+                              layout:
+                                type: flex
+                                flex_flow: COLUMN
+                                flex_align_main: END
+                                flex_align_cross: CENTER
+                                pad_row: 3
+                              widgets:
+                                - obj: {styles: garage_slat}
+                                - obj: {styles: garage_slat}
+                                - obj: {styles: garage_slat}
+                                - obj: {styles: garage_slat}
+                                - obj: {styles: garage_slat}
+                                - obj: {styles: garage_slat}
+                                - obj: {styles: garage_slat}
+                                - obj: {styles: garage_slat}
+                                - obj: {styles: garage_slat}
+                                - obj: {styles: garage_slat}
+                          - label:
+                              id: garage_position_label
+                              align: CENTER
+                              text: "--%"
+                              text_font: font_title
+                              text_color: 0xFFFFFF
+                              bg_color: 0x0F1B40
+                              bg_opa: 75%
+                              radius: 6
+                              pad_left: 6
+                              pad_right: 6
+                    - label:
+                        id: garage_status_label
+                        align: BOTTOM_LEFT
+                        x: 14
+                        y: -30
+                        text: "--"
+                        text_font: font_small
+                        text_color: 0xAAB8EE
+                    # One button for the controller's next action (Up / Stop /
+                    # Down); garage_update_button sets its icon and colour.
                     - button:
                         id: garage_btn
                         styles: round_btn
                         align: BOTTOM_RIGHT
                         x: -12
-                        y: -14
-                        width: 52
-                        height: 52
+                        y: -10
+                        width: 56
+                        height: 56
                         bg_color: 0x3A4DE0
                         on_click:
                           - homeassistant.action:
-                              action: cover.toggle
+                              action: button.press
                               data:
-                                entity_id: ${garage_entity}
+                                entity_id: !lambda |-
+                                  if (id(garage_next_stop).state) return std::string("${garage_stop_button}");
+                                  if (id(garage_next_down).state) return std::string("${garage_down_button}");
+                                  return std::string("${garage_up_button}");
                         widgets:
                           - label:
+                              id: garage_btn_icon
                               align: CENTER
-                              text: "\U000F06D9"
-                              text_font: font_mdi_24
+                              text: "\U000F0737"
+                              text_font: font_mdi_36
                               text_color: 0xFFFFFF
 
         # =====================================================================
@@ -1199,7 +1428,7 @@ lvgl:
             grid_cell_x_align: STRETCH
             grid_cell_y_align: STRETCH
             widgets:
-              # VoIP panel. Sized by the grid cell (about 382x255); the call-state
+              # VoIP panel. Sized by the grid cell (about 382x232); the call-state
               # groups fill the right 60% and update_call_tile shows one at a time.
               - obj:
                   id: voip_tile
@@ -1220,27 +1449,11 @@ lvgl:
                         x: 48
                         y: 8
                         text: "Intercom"
-                    - obj:          # door-station picture placeholder
+                    - image:        # door-station photo, fitted to 130x174
+                        src: img_intercom_panel
                         align: BOTTOM_LEFT
-                        x: 12
+                        x: 14
                         y: -12
-                        width: 130
-                        height: 196
-                        radius: 10
-                        border_width: 0
-                        bg_color: 0xD7D9DE
-                        bg_grad_color: 0x3B6B3A
-                        bg_grad_dir: HOR
-                        scrollable: false
-                        widgets:
-                          - obj:
-                              x: 22
-                              y: 24
-                              width: 52
-                              height: 120
-                              radius: 6
-                              border_width: 0
-                              bg_color: 0x15171C
 
                     # ---- idle: contact browser ----
                     - obj:
@@ -1293,7 +1506,7 @@ lvgl:
                               width: 210
                               text: "-"
                               text_color: 0xFFFFFF
-                              text_font: font_title
+                              text_font: font_small_18
                               text_align: CENTER
                               long_mode: DOT
                           - label:
@@ -1433,7 +1646,7 @@ lvgl:
                               align: TOP_MID
                               y: 38
                               width: 216
-                              height: 160
+                              height: 138
                               bg_opa: TRANSP
                               border_width: 0
                               pad_all: 0
@@ -1555,7 +1768,7 @@ lvgl:
                               width: 210
                               text: ""
                               text_color: 0xFFFFFF
-                              text_font: font_title
+                              text_font: font_small_18
                               text_align: CENTER
                               long_mode: DOT
                           - button:
@@ -1761,12 +1974,16 @@ lvgl:
                         styles: title_text
                         x: 48
                         y: 8
-                        text: "Electricity Usage"
-                    - obj:          # usage bars (placeholder heights, one obj each)
+                        text: "Electricity"
+                    # Daily energy for the last 14 completed days, oldest on
+                    # the left. fetch_energy_history fills energy_history from
+                    # HA long-term statistics; draw_energy_bars scales the bars.
+                    - obj:
+                        id: elec_bars
                         x: 14
-                        y: 50
+                        y: 48
                         width: 232
-                        height: 160
+                        height: 140
                         bg_opa: TRANSP
                         border_width: 0
                         pad_all: 0
@@ -1778,21 +1995,27 @@ lvgl:
                           flex_align_cross: END
                           flex_align_track: END
                         widgets:
-                          - obj: {styles: ebar, height: 20}
-                          - obj: {styles: ebar, height: 35}
-                          - obj: {styles: ebar, height: 55}
-                          - obj: {styles: ebar, height: 80}
-                          - obj: {styles: ebar, height: 100}
-                          - obj: {styles: ebar, height: 70}
-                          - obj: {styles: ebar, height: 45}
-                          - obj: {styles: ebar, height: 60}
-                          - obj: {styles: ebar, height: 40}
-                          - obj: {styles: ebar, height: 30}
-                          - obj: {styles: ebar, height: 50}
-                          - obj: {styles: ebar, height: 35}
-                          - obj: {styles: ebar, height: 25}
-                          - obj: {styles: ebar, height: 45}
-                          - obj: {styles: ebar, height: 60}
+                          - obj: {id: ebar_0, styles: ebar}
+                          - obj: {id: ebar_1, styles: ebar}
+                          - obj: {id: ebar_2, styles: ebar}
+                          - obj: {id: ebar_3, styles: ebar}
+                          - obj: {id: ebar_4, styles: ebar}
+                          - obj: {id: ebar_5, styles: ebar}
+                          - obj: {id: ebar_6, styles: ebar}
+                          - obj: {id: ebar_7, styles: ebar}
+                          - obj: {id: ebar_8, styles: ebar}
+                          - obj: {id: ebar_9, styles: ebar}
+                          - obj: {id: ebar_10, styles: ebar}
+                          - obj: {id: ebar_11, styles: ebar}
+                          - obj: {id: ebar_12, styles: ebar}
+                          - obj: {id: ebar_13, styles: ebar}
+                    - label:
+                        id: elec_hist_label
+                        x: 14
+                        y: 196
+                        text: "Last 14 days"
+                        text_font: font_small
+                        text_color: 0xAAB8EE
                     - obj:          # ring + live value
                         align: RIGHT_MID
                         x: -22
@@ -1824,6 +2047,7 @@ lvgl:
                               y: -8
                               text: "2.4"
                               text_font: font_ui_medium
+                              text_color: 0xFFFFFF
                           - label:
                               align: CENTER
                               y: 16
@@ -1866,13 +2090,13 @@ lvgl:
                         x: 12
                         y: 46
                         width: 173
-                        height: 86
+                        height: 80
                         bg_color: 0x0F3A73
                         border_color: 0x2B4AA0
                         scrollable: false
                         widgets:
                           - label: {styles: icon_24, x: 10, y: 8, text: "\U000F04B9"}
-                          - label: {x: 42, y: 12, text: "Living Room", text_font: font_small}
+                          - label: {x: 42, y: 12, text: "Living Room", text_font: font_small, text_color: 0xFFFFFF}
                           - label:
                               id: temp_living_label
                               align: BOTTOM_LEFT
@@ -1880,18 +2104,19 @@ lvgl:
                               y: -6
                               text: "--.-°"
                               text_font: font_title
+                              text_color: 0xFFFFFF
                     - obj:          # Bedroom
                         styles: tile_style
                         x: 197
                         y: 46
                         width: 173
-                        height: 86
+                        height: 80
                         bg_color: 0x2A2A73
                         border_color: 0x4A4AB0
                         scrollable: false
                         widgets:
                           - label: {styles: icon_24, x: 10, y: 8, text: "\U000F02E3"}
-                          - label: {x: 42, y: 12, text: "Bedroom", text_font: font_small}
+                          - label: {x: 42, y: 12, text: "Bedroom", text_font: font_small, text_color: 0xFFFFFF}
                           - label:
                               id: temp_bedroom_label
                               align: BOTTOM_LEFT
@@ -1899,18 +2124,19 @@ lvgl:
                               y: -6
                               text: "--.-°"
                               text_font: font_title
+                              text_color: 0xFFFFFF
                     - obj:          # Outdoor
                         styles: tile_style
                         x: 12
-                        y: 144
+                        y: 138
                         width: 173
-                        height: 86
+                        height: 80
                         bg_color: 0x3A3326
                         border_color: 0x6A5A3A
                         scrollable: false
                         widgets:
                           - label: {styles: icon_24, x: 10, y: 8, text: "\U000F0599"}
-                          - label: {x: 42, y: 12, text: "Outdoor", text_font: font_small}
+                          - label: {x: 42, y: 12, text: "Outdoor", text_font: font_small, text_color: 0xFFFFFF}
                           - label:
                               id: temp_outdoor_label
                               align: BOTTOM_LEFT
@@ -1918,18 +2144,19 @@ lvgl:
                               y: -6
                               text: "--.-°"
                               text_font: font_title
+                              text_color: 0xFFFFFF
                     - obj:          # Humidity
                         styles: tile_style
                         x: 197
-                        y: 144
+                        y: 138
                         width: 173
-                        height: 86
+                        height: 80
                         bg_color: 0x0F4066
                         border_color: 0x2A7AA8
                         scrollable: false
                         widgets:
                           - label: {styles: icon_24, x: 10, y: 8, text: "\U000F058C"}
-                          - label: {x: 42, y: 12, text: "Humidity", text_font: font_small}
+                          - label: {x: 42, y: 12, text: "Humidity", text_font: font_small, text_color: 0xFFFFFF}
                           - label:
                               id: humidity_label
                               align: BOTTOM_LEFT
@@ -1937,6 +2164,7 @@ lvgl:
                               y: -6
                               text: "--%"
                               text_font: font_title
+                              text_color: 0xFFFFFF
 
         # =====================================================================
         # 8. SECURITY CAMERAS                col 1 span 7 | row 12 span 5
@@ -1967,7 +2195,7 @@ lvgl:
                         styles: title_text
                         x: 48
                         y: 6
-                        text: "Security Cameras"
+                        text: "Cameras"
                     - obj:          # Front Door: live RTSP feed (esp_rtsp_stream front_door)
                         id: cam_front
                         x: 12
@@ -2075,7 +2303,7 @@ lvgl:
                                 entity_id: ${scene_home_entity}
                           - lvgl.widget.update: {id: scene_home_btn, state: {checked: true}}
                           - lvgl.widget.update: {id: scene_night_btn, state: {checked: false}}
-                          - lvgl.widget.update: {id: scene_garden_btn, state: {checked: false}}
+                          - lvgl.widget.update: {id: scene_movie_btn, state: {checked: false}}
                         widgets:
                           - label: {align: TOP_MID, y: 30, text: "\U000F02DC", text_font: font_mdi_36, text_color: 0xFFFFFF}
                           - label: {align: BOTTOM_MID, y: -26, text: "Home", text_font: font_body}
@@ -2096,12 +2324,12 @@ lvgl:
                                 entity_id: ${scene_night_entity}
                           - lvgl.widget.update: {id: scene_home_btn, state: {checked: false}}
                           - lvgl.widget.update: {id: scene_night_btn, state: {checked: true}}
-                          - lvgl.widget.update: {id: scene_garden_btn, state: {checked: false}}
+                          - lvgl.widget.update: {id: scene_movie_btn, state: {checked: false}}
                         widgets:
                           - label: {align: TOP_MID, y: 30, text: "\U000F0594", text_font: font_mdi_36, text_color: 0xB8A8FF}
                           - label: {align: BOTTOM_MID, y: -26, text: "Night", text_font: font_body}
                     - button:
-                        id: scene_garden_btn
+                        id: scene_movie_btn
                         styles: scene_btn
                         x: 324
                         y: 46
@@ -2114,13 +2342,13 @@ lvgl:
                           - homeassistant.action:
                               action: scene.turn_on
                               data:
-                                entity_id: ${scene_garden_entity}
+                                entity_id: ${scene_movie_entity}
                           - lvgl.widget.update: {id: scene_home_btn, state: {checked: false}}
                           - lvgl.widget.update: {id: scene_night_btn, state: {checked: false}}
-                          - lvgl.widget.update: {id: scene_garden_btn, state: {checked: true}}
+                          - lvgl.widget.update: {id: scene_movie_btn, state: {checked: true}}
                         widgets:
-                          - label: {align: TOP_MID, y: 30, text: "\U000F032A", text_font: font_mdi_36, text_color: 0xB8A8FF}
-                          - label: {align: BOTTOM_MID, y: -26, text: "Garden", text_font: font_body}
+                          - label: {align: TOP_MID, y: 30, text: "\U000F0FCE", text_font: font_mdi_36, text_color: 0xB8A8FF}
+                          - label: {align: BOTTOM_MID, y: -26, text: "Movie", text_font: font_body}
 
         # ---- row 17: bottom half grid intentionally empty -------------------
 
@@ -2623,7 +2851,130 @@ globals:
     restore_value: false
     initial_value: '""'
 
+  # Daily energy (kWh) for the last 14 completed days, oldest first; NAN = no
+  # data. Filled by fetch_energy_history.
+  - id: energy_history
+    type: float[14]
+    restore_value: false
+
 script:
+  # Top-right status: Wi-Fi strength and the ESP32-C6 co-processor (its
+  # firmware version, amber when an update is available). Wi-Fi runs through
+  # the C6, so "connected" also means the C6 link is up.
+  - id: update_status_bar
+    then:
+      - lambda: |-
+          const bool up = wifi::global_wifi_component->is_connected();
+
+          const char *wifi_icon = "\U000F05AA";   // wifi-off
+          uint32_t wifi_color = 0xEF4444;
+          char wifi_text[16] = "Offline";
+          if (up) {
+            const int rssi = wifi::global_wifi_component->wifi_rssi();
+            wifi_color = 0x27D98D;
+            if (rssi >= 0 || rssi < -100) {
+              // Not every esp-hosted build reports RSSI.
+              wifi_icon = "\U000F0928";
+              snprintf(wifi_text, sizeof(wifi_text), "Wi-Fi");
+            } else {
+              wifi_icon = rssi > -55 ? "\U000F0928" : rssi > -67 ? "\U000F0925" :
+                          rssi > -78 ? "\U000F0922" : "\U000F091F";
+              if (rssi <= -78) wifi_color = 0xF59E0B;
+              snprintf(wifi_text, sizeof(wifi_text), "%d dBm", rssi);
+            }
+          }
+          lv_label_set_text(id(status_wifi_icon), wifi_icon);
+          lv_obj_set_style_text_color(id(status_wifi_icon), lv_color_hex(wifi_color), LV_PART_MAIN);
+          lv_label_set_text(id(status_wifi_label), wifi_text);
+
+          const auto &c6 = id(esp32_c6_coprocessor_update);
+          const bool c6_update = c6.state == update::UPDATE_STATE_AVAILABLE;
+          std::string c6_text = "C6 ";
+          c6_text += c6.update_info.current_version.empty() ? (up ? "OK" : "--")
+                                                            : c6.update_info.current_version;
+          if (c6_update) c6_text += " (update)";
+          const uint32_t c6_color = !up ? 0xEF4444 : c6_update ? 0xF59E0B : 0x27D98D;
+          lv_label_set_text(id(status_c6_label), c6_text.c_str());
+          lv_obj_set_style_text_color(id(status_c6_icon), lv_color_hex(c6_color), LV_PART_MAIN);
+
+  # Reads the daily maximum of ${energy_daily_entity} (its 11:59 pm value)
+  # for the last 14 completed days from Home Assistant long-term statistics.
+  - id: fetch_energy_history
+    mode: single
+    then:
+      - if:
+          condition:
+            and:
+              - api.connected:
+              - time.has_time:
+                  id: my_time
+          then:
+            - homeassistant.action:
+                action: recorder.get_statistics
+                data:
+                  statistic_ids: ${energy_daily_entity}
+                  period: day
+                  types: max
+                  # Local midnight 14 days ago up to local midnight today.
+                  start_time: !lambda |-
+                    const auto now = id(my_time).now();
+                    return ESPTime::from_epoch_local(now.timestamp - 14 * 86400)
+                        .strftime("%Y-%m-%d 00:00:00");
+                  end_time: !lambda |-
+                    return id(my_time).now().strftime("%Y-%m-%d 00:00:00");
+                capture_response: true
+                on_success:
+                  - lambda: |-
+                      JsonObjectConst root = response["response"].is<JsonObjectConst>()
+                          ? response["response"].as<JsonObjectConst>() : response;
+                      JsonArrayConst rows =
+                          root["statistics"]["${energy_daily_entity}"].as<JsonArrayConst>();
+                      for (auto &v : id(energy_history)) v = NAN;
+                      // Newest rows on the right; missing days stay empty.
+                      const int n = rows.size();
+                      const int first = n > 14 ? n - 14 : 0;
+                      int slot = 14 - (n - first);
+                      for (int i = first; i < n; i++)
+                        id(energy_history)[slot++] = rows[i]["max"] | NAN;
+                      ESP_LOGI("energy", "Loaded %d days of %s", n - first, "${energy_daily_entity}");
+                  - script.execute: draw_energy_bars
+                on_error:
+                  - logger.log:
+                      level: WARN
+                      tag: energy
+                      format: "recorder.get_statistics failed: %s"
+                      args: ['error.c_str()']
+
+  # Scales the 14 bars to the busiest day; days without data show as a stub.
+  - id: draw_energy_bars
+    then:
+      - lambda: |-
+          lv_obj_t *bars[14] = {id(ebar_0), id(ebar_1), id(ebar_2), id(ebar_3), id(ebar_4),
+                                id(ebar_5), id(ebar_6), id(ebar_7), id(ebar_8), id(ebar_9),
+                                id(ebar_10), id(ebar_11), id(ebar_12), id(ebar_13)};
+          float max_v = 0, total = 0;
+          int days = 0;
+          for (float v : id(energy_history)) {
+            if (std::isnan(v)) continue;
+            max_v = std::max(max_v, v);
+            total += v;
+            days++;
+          }
+          const int full = lv_obj_get_content_height(id(elec_bars));
+          for (int i = 0; i < 14; i++) {
+            const float v = id(energy_history)[i];
+            const bool ok = !std::isnan(v) && max_v > 0;
+            const int h = ok ? std::max(4, (int) (v / max_v * full)) : 4;
+            lv_obj_set_height(bars[i], h);
+            lv_obj_set_style_bg_opa(bars[i], ok ? LV_OPA_COVER : LV_OPA_30, LV_PART_MAIN);
+          }
+          char text[48];
+          if (days > 0)
+            snprintf(text, sizeof(text), "14 days  avg %.1f kWh/day", total / days);
+          else
+            snprintf(text, sizeof(text), "14 days  no data");
+          lv_label_set_text(id(elec_hist_label), text);
+
   - id: show_voip_keypad
     mode: single
     then:
@@ -2842,7 +3193,7 @@ script:
             voip_stack.is_ringing:
           then:
             - media_player.play_media:
-                id: ringtone_player
+                id: speaker_player
                 media_url: "audio-file://voip_ringing_sound"
                 announcement: true
             - wait_until:
@@ -2861,14 +3212,14 @@ script:
                                media_source::MediaSourceState::IDLE;
                 timeout: 5s
       - media_player.stop:
-          id: ringtone_player
+          id: speaker_player
           announcement: true
 
   - id: voip_stop_ringtone
     then:
       - script.stop: voip_ringing_loop
       - media_player.stop:
-          id: ringtone_player
+          id: speaker_player
           announcement: true
 
   # Copies entity state into the settings page widgets when it opens.
@@ -2927,7 +3278,41 @@ script:
                 static_cast<unsigned>(id(phone).get_contact_count()));
             return std::string(buf);
 
-  # VA end handler (mode: restart ensures barge-in cancels previous on_end)
+  # NS4150 amplifier: on only while a call is active/ringing or the Speaker
+  # media player is playing, and not muted. Left on while idle it amplifies
+  # the DAC's idle noise into an audible squeal. Off is delayed 1 s so the
+  # tail of a sound is not cut and back-to-back sounds do not click.
+  - id: speaker_amp_update
+    mode: restart
+    then:
+      - if:
+          condition:
+            lambda: |-
+              return !id(speaker_mute).state &&
+                     (!id(phone).is_idle() ||
+                      id(speaker_player).state != media_player::MEDIA_PLAYER_STATE_IDLE);
+          then:
+            - output.turn_on: speaker_enable
+          else:
+            - delay: 1s
+            - output.turn_off: speaker_enable
+
+  # Garage button shows the controller's next action: Stop (red), Down, or Up.
+  - id: garage_update_button
+    then:
+      - lambda: |-
+          const char *icon = "\U000F0737";   // arrow-up-bold
+          uint32_t color = 0x3A4DE0;
+          if (id(garage_next_stop).state) {
+            icon = "\U000F0666";             // stop-circle
+            color = 0xDC2626;
+          } else if (id(garage_next_down).state) {
+            icon = "\U000F072E";             // arrow-down-bold
+          }
+          lv_label_set_text(id(garage_btn_icon), icon);
+          lv_obj_set_style_bg_color(id(garage_btn), lv_color_hex(color), LV_PART_MAIN);
+
+  # Backlight: full on touch/activity, then dims after 1 and 3 minutes.
   - id: backlight_timer
     mode: restart
     then:
@@ -2972,6 +3357,40 @@ binary_sensor:
           - OFF for at least 300ms
         then:
           - switch.toggle: mute
+
+  # Garage roller door (see the garage_* substitutions)
+  - platform: homeassistant
+    id: garage_door_open
+    entity_id: ${garage_status_entity}
+    internal: true
+    on_state:
+      - lvgl.label.update:
+          id: garage_icon
+          text: !lambda 'return std::string(x ? "\U000F06DA" : "\U000F06D9");'
+      - lvgl.label.update:
+          id: garage_status_label
+          text: !lambda 'return std::string(x ? "Open" : "Closed");'
+
+  - platform: homeassistant
+    id: garage_next_up
+    entity_id: ${garage_next_up_entity}
+    internal: true
+    on_state:
+      - script.execute: garage_update_button
+
+  - platform: homeassistant
+    id: garage_next_stop
+    entity_id: ${garage_next_stop_entity}
+    internal: true
+    on_state:
+      - script.execute: garage_update_button
+
+  - platform: homeassistant
+    id: garage_next_down
+    entity_id: ${garage_next_down_entity}
+    internal: true
+    on_state:
+      - script.execute: garage_update_button
 
 switch:
   # Echo cancellation, noise suppression and auto gain (esp_afe runtime switches).
@@ -3033,14 +3452,9 @@ switch:
       - logger.log:
           level: INFO
           tag: mute
-          format: "Speaker mute OFF: amplifier on, DAC unmuted"
-      - if:
-          condition:
-            speaker.is_playing: hw_speaker
-          then:
-            - output.turn_on: speaker_enable
-            - delay: 50ms
+          format: "Speaker mute OFF: DAC unmuted, amplifier follows playback"
       - speaker.mute_off: hw_speaker
+      - script.execute: speaker_amp_update
 
 select:
   - platform: template
@@ -3098,6 +3512,24 @@ select:
           id(aec_mode_select).publish_state(id(afe_processor).get_mode_name());
 
 sensor:
+  - platform: homeassistant
+    id: garage_position
+    entity_id: ${garage_position_entity}
+    internal: true
+    on_value:
+      - lvgl.label.update:
+          id: garage_position_label
+          text:
+            format: "%.0f%%"
+            args: ['x']
+      # Position 100 % = fully open (no slats), 0 % = closed (frame full).
+      - lambda: |-
+          int pos = (int) x;
+          if (pos < 0) pos = 0;
+          if (pos > 100) pos = 100;
+          const int full = lv_obj_get_content_height(id(garage_position_container));
+          lv_obj_set_height(id(garage_door_curtain), full * (100 - pos) / 100);
+
   - platform: homeassistant
     id: ha_power
     entity_id: ${power_entity}
@@ -3200,16 +3632,12 @@ text_sensor:
           id: front_lock_icon
           text: !lambda 'return std::string(x == "locked" ? "\U000F033E" : "\U000F033F");'
 
-  - platform: homeassistant
-    id: garage_state
-    entity_id: ${garage_entity}
-    internal: true
-    on_value:
-      - lvgl.label.update:
-          id: garage_icon
-          text: !lambda 'return std::string(x == "closed" ? "\U000F06D9" : "\U000F06DA");'
-
 interval:
+  # Top-right Wi-Fi / C6 status
+  - interval: 10s
+    then:
+      - script.execute: update_status_bar
+
   # Home page clock card
   - interval: 1s
     then:
