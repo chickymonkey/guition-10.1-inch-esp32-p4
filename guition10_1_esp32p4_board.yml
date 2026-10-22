@@ -171,8 +171,16 @@ esp_ldo:
   - channel: 3
     voltage: 2.5V
 
-# Allow interrupts between large video cache-writeback chunks.
+# [GUITION] Production ESP32-P4 silicon (chip revision v3.x). The p4_base
+# package sets board esp32-p4-evboard, which ESPHome treats as a pre-v3
+# engineering sample; that firmware is not binary compatible with v3.x and
+# crashes at boot. Boot log shows "chip revision: vX.Y" if unsure; for a
+# pre-v3 board use board: esp32-p4-evboard and engineering_sample: true.
+# The sdkconfig option allows interrupts between large video cache-writeback
+# chunks.
 esp32:
+  board: esp32-p4_r3-evboard
+  engineering_sample: false
   flash_size: 16MB
   partitions: partitions16mb.csv
   framework:
@@ -190,7 +198,12 @@ external_components:
   - source: ${voip_stack_components_source}
     components: [voip_stack]
   - source: ${ext_components_source}
-    components: [speaker, mipi_dsi]
+    components: [speaker]
+  # [GUITION] The intercom fork's mipi_dsi (needed by p4_video_renderer), patched
+  # for ESP32-P4 v3.x silicon. See components/mipi_dsi/UPSTREAM.md.
+  - source: github://chickymonkey/guition-10.1-inch-esp32-p4@main
+    components: [mipi_dsi]
+    refresh: 1d
   # [GUITION] OV02C10 sensor driver (auto-detected by esp_video_camera, which
   # comes from the p4_video_jpeg package).
   - source: github://chickymonkey/camera_OV02C10_component@main
