@@ -21,8 +21,8 @@
 #   [VoIP RX] -----------------------------> voip_speaker_input ---------+
 #                       (resamplers) -> audio_mixer 48 kHz mono -> hw_speaker
 #                                     -> ES8311 -> NS4150 amp -> speaker
-#   The NS4150 amp (PA_CTRL) is only on during calls, ringing or playback;
-#   speaker_amp_update switches it.
+#   The NS4150 amp (PA_CTRL) is only on while audio plays; esp_audio_stack
+#   on_amplifier_required / on_amplifier_idle switch it.
 #
 # Hardware [GUITION JC8012P4A1]:
 #   - ESP32-P4 (16MB flash, 32MB hex PSRAM), ESP32-C6 Wi-Fi over SDIO
@@ -66,15 +66,17 @@ substitutions:
   settings_label_font: font_body
 
   # [GUITION] SIP video for packages/voip/p4_video_jpeg.yaml. The OV02C10 runs
-  # 1920x1080; the camera only downscales in exact 1/16 steps: 960x540 (8/16),
-  # 1200x675 (10/16), 1440x810 (12/16). 1200x675 is used.
-  p4_video_width: "1200"
-  p4_video_height: "675"
-  p4_video_fps: "10"
+  # 1920x1080; the camera only downscales in exact 1/16 steps. 960x540 (1/2)
+  # is the size that works: 1200x675 is rejected by the P4 video path
+  # ("input width=1200, height=675 is not supported"), which then falls back
+  # to full 1080p and runs out of buffer memory.
+  p4_video_width: "960"
+  p4_video_height: "540"
+  p4_video_fps: "13"
   p4_camera_rotation: "0"
   p4_jpeg_quality: "10"
-  p4_video_max_decode_width: "1200"
-  p4_video_max_decode_height: "1200"
+  p4_video_max_decode_width: "960"
+  p4_video_max_decode_height: "960"
 
   # ---------------------------------------------------------------------------
   # Pinout: ESP32-C6 hosted Wi-Fi SDIO link
@@ -107,7 +109,7 @@ substitutions:
   # ---------------------------------------------------------------------------
   display_reset_pin: "27"
   display_backlight_pin: GPIO23   # [GUITION] LCD_PWM -> MP3202 EN
-  speaker_enable_pin: GPIO20      # [GUITION] PA_CTRL -> NS4150 CTRL (high = on, unverified)
+  speaker_enable_pin: GPIO20      # [GUITION] PA_CTRL -> NS4150 CTRL (high = on, per vendor BSP)
   boot_button_pin: GPIO35         # [GUITION] SW3 BOOTMODE, 10K pull-up
 
   # ---------------------------------------------------------------------------
@@ -115,10 +117,10 @@ substitutions:
   # ---------------------------------------------------------------------------
   heater_entity: climate.rinnai_touch
   front_lock_entity: lock.frontdoor_aqara
-  # Garage roller door: position + status sensors, the controller's "next
+  garage_lock_entity: lock.garagedoor_aqara
+  # Garage roller door: position sensor (also gives Open/Closed), the "next
   # action" flags and its Up / Stop / Down buttons (same as the HA card).
   garage_position_entity: sensor.garage_roller_door_garage_position
-  garage_status_entity: binary_sensor.garage_roller_door_garage_door_status
   garage_next_up_entity: binary_sensor.garage_roller_door_garage_next_is_up
   garage_next_stop_entity: binary_sensor.garage_roller_door_garage_next_is_stop
   garage_next_down_entity: binary_sensor.garage_roller_door_garage_next_is_down
@@ -126,7 +128,7 @@ substitutions:
   garage_stop_button: button.garage_roller_door_garage_stop
   garage_down_button: button.garage_roller_door_garage_down
   power_entity: sensor.powerpal_real_time_power             # in W
-  # Daily energy meter (resets at midnight); its daily maximum is the 11:59 pm
+  # Daily energy meter (resets at midnight); its daily change is the 11:59 pm
   # reading. The Electricity bars show the last 14 days of it.
   energy_daily_entity: sensor.powerpal_daily_energy
   power_max_w: "6000"                         # full ring = 6 kW
@@ -158,7 +160,7 @@ packages:
   audio_stack_controls: github://n-IA-hane/esphome-intercom/packages/esp_audio_stack/controls.yaml@main
   # Speaker media player: mixer + speaker_source components and the FLAC
   # (HA's preferred format), MP3 and WAV decoders. The amplifier is switched by
-  # speaker_amp_update, not by the speaker_power_output package.
+  # the esp_audio_stack amplifier hooks below, not by the speaker_power_output package.
   playback_compat: github://n-IA-hane/esphome-intercom/packages/media_player/playback_compat.yaml@main
   http_media_codecs: github://n-IA-hane/esphome-intercom/packages/audio/http_media_codecs.yaml@main
   flac_codecs_psram: github://n-IA-hane/esphome-intercom/packages/audio/flac_codecs_psram.yaml@main
@@ -237,6 +239,7 @@ external_components:
   ##RTSP stream
   - source: github://chickymonkey/Esp-rtsp-stream
     components: [esp_rtsp_stream]
+    refresh: 1d
 
 # RTSP camera feed, drawn into cam_canvas in the home page Security Cameras
 # card. The URL comes from Home Assistant (cam_url text sensor).
@@ -248,7 +251,30 @@ esp_rtsp_stream:
     max_fps: 7                         # optional, default from chip profile
     max_frame_size: 262144             # optional, bytes per JPEG frame
     log_frame_info: true               # fps/decode stats every 30 s
-
+  - id: driveway_cam
+    username: viewer                   # default login when the URL has none
+    password: !secret camera_password
+    lvgl_canvas: cam_driveway_canvas
+    max_fps: 7                         # optional, default from chip profile
+    max_frame_size: 262144             # optional, bytes per JPEG frame
+    log_frame_info: true
+  # Cameras page: the same two cameras at 640x480. A stream only connects
+  # while its canvas is on screen (and drops ~3 s after it is hidden), so the
+  # home tiles and these never pull from a camera at the same time.
+  - id: front_door_full
+    username: viewer
+    password: !secret camera_password
+    lvgl_canvas: cam_front_full_canvas
+    max_fps: 10
+    max_frame_size: 262144
+    log_frame_info: true
+  - id: driveway_full
+    username: viewer
+    password: !secret camera_password
+    lvgl_canvas: cam_driveway_full_canvas
+    max_fps: 10
+    max_frame_size: 262144
+    log_frame_info: true
 # =============================================================================
 # CONNECTIVITY
 # =============================================================================
@@ -431,6 +457,17 @@ esp_audio_stack:
   use_stereo_aec_reference: true
   reference_channel: right
   buffers_in_psram: true
+  # NS4150 amp follows the real speaker stream (VoIP RX, ringtone, media),
+  # as in the upstream boards: on when audio starts, off 2 s after it stops.
+  on_amplifier_required:
+    - script.stop: speaker_amp_idle_off
+    - if:
+        condition:
+          switch.is_off: speaker_mute
+        then:
+          - output.turn_on: speaker_enable
+  on_amplifier_idle:
+    - script.execute: speaker_amp_idle_off
 
 # Call-only AFE: no wake word or VA, so VAD is off.
 esp_afe:
@@ -542,14 +579,6 @@ media_player:
       sources:
         - announcement_http_source
         - ringtone_file_source
-    on_play:
-      - script.execute: speaker_amp_update
-    on_announcement:
-      - script.execute: speaker_amp_update
-    on_pause:
-      - script.execute: speaker_amp_update
-    on_idle:
-      - script.execute: speaker_amp_update
 
 # =============================================================================
 # VOIP
@@ -607,7 +636,6 @@ voip_stack:
         text: "CALLING"
     - script.execute: backlight_timer
     - script.execute: update_call_tile
-    - script.execute: speaker_amp_update
 
   on_dest_ringing:
     - lambda: id(peer_name) = peer;
@@ -620,19 +648,16 @@ voip_stack:
     - lambda: id(peer_name) = peer;
     - script.execute: backlight_timer
     - script.execute: show_phone_page
-    - script.execute: speaker_amp_update
     - script.execute: voip_start_ringtone
 
   on_in_call:
     - lambda: id(peer_name) = peer;
     - script.execute: voip_stop_ringtone
     - script.execute: update_call_tile
-    - script.execute: speaker_amp_update
 
   on_idle:
     - script.execute: voip_stop_ringtone
     - script.execute: show_phone_page
-    - script.execute: speaker_amp_update
 
   on_hangup:
     - script.execute: voip_stop_ringtone
@@ -743,7 +768,7 @@ font:
       weight: 600
     id: font_clock_big
     bpp: 4             # anti-aliased (default 1 bpp is jagged)
-    size: 88
+    size: 110
     glyphs: "0123456789:-"
 
   - file: "https://raw.githubusercontent.com/Templarian/MaterialDesign-Webfont/master/fonts/materialdesignicons-webfont.ttf"
@@ -814,11 +839,11 @@ font:
 # Card photos, from this repo's images/ folder (transparent PNG backgrounds).
 # resize keeps the aspect ratio and fits inside the given box.
 image:
-  # Front door lock card background: card height 232 px, sides cropped.
+  # Front / garage lock cards: 75% of the ~86 px card width (65x98, aspect kept).
   - platform: file
     file: ${images_base}smart_lock.png
     id: img_smart_lock
-    resize: 154x232
+    resize: 65x232
     type: RGB565
     transparency: alpha_channel
     byte_order: little_endian
@@ -860,6 +885,7 @@ lvgl:
       radius: 14
       pad_all: 0
       text_color: 0xE8EDFF
+      
     - id: icon_24
       text_font: font_mdi_24
       text_color: 0xE8EDFF
@@ -1006,6 +1032,19 @@ lvgl:
                     - label: {align: TOP_MID, y: 14, text: "\U000F02DC", text_font: font_mdi_24, text_color: 0xFFFFFF}
                     - label: {align: BOTTOM_MID, y: -2, text: "Home", text_font: font_small}
               - button:
+                  id: nav_cameras_btn
+                  styles: scene_btn
+                  width: 100%
+                  height: 84
+                  on_click:
+                    - lvgl.page.show:
+                        id: cameras_page
+                        animation: MOVE_LEFT
+                        time: 250ms
+                  widgets:
+                    - label: {align: TOP_MID, y: 14, text: "\U000F07DE", text_font: font_mdi_24, text_color: 0xE8EDFF}
+                    - label: {align: BOTTOM_MID, y: -2, text: "Cameras", text_font: font_small}
+              - button:
                   id: nav_settings_btn
                   styles: scene_btn
                   width: 100%
@@ -1044,36 +1083,29 @@ lvgl:
                   bg_grad_dir: VER
                   border_width: 0
                   widgets:
-                    - obj:          # moon
-                        width: 36
-                        height: 36
-                        radius: 18
-                        align: TOP_RIGHT
-                        x: -44
-                        y: 28
-                        bg_color: 0xC9B8FF
-                        bg_opa: 85%
-                        border_width: 0
                     - label:
                         id: clock_time_label
                         align: CENTER
-                        y: -24
+                        y: -18
                         text: "--:--"
                         text_font: font_clock_big
                         text_color: 0xFFFFFF
+                    # Bottom row: day on the left, date (no year) on the right
                     - label:
                         id: clock_day_label
-                        align: CENTER
-                        y: 40
+                        align: BOTTOM_LEFT
+                        x: 18
+                        y: -14
                         text: ""
                         text_font: font_ui_medium
                         text_color: 0xFFFFFF
                     - label:
                         id: clock_date_label
-                        align: CENTER
-                        y: 72
+                        align: BOTTOM_RIGHT
+                        x: -18
+                        y: -14
                         text: ""
-                        text_font: font_small
+                        text_font: font_ui_medium
                         text_color: 0xD6CCFF
 
         # =====================================================================
@@ -1229,7 +1261,6 @@ lvgl:
 
         # =====================================================================
         # 3. FRONT DOOR LOCK                 col 9 span 1 | row 1 span 5
-        #    (col 10 is free for another card)
         # =====================================================================
         - obj:
             styles: cell_style
@@ -1249,18 +1280,16 @@ lvgl:
                   scrollable: false
                   clip_corner: true
                   widgets:
-                    # Background: lock photo scaled to the card height (about
-                    # 86x232) and centred, so the sides are cropped.
+                    # Background: lock photo at 75% of the card width centred.
                     - image:
                         src: img_smart_lock
                         align: CENTER
                     - label:
-                        id: front_lock_icon
-                        styles: icon_24
-                        text_color: 0x27D98D
-                        x: 8
+                        align: TOP_MID
                         y: 8
-                        text: "\U000F033E"
+                        text: "Front"
+                        text_font: font_small
+                        text_color: 0xFFFFFF
                     - button:
                         id: front_lock_btn
                         styles: round_btn
@@ -1289,13 +1318,78 @@ lvgl:
                                       entity_id: ${front_lock_entity}
                         widgets:
                           - label:
+                              id: front_lock_icon        # locked / unlocked icon
                               align: CENTER
                               text: "\U000F033E"
                               text_font: font_mdi_24
                               text_color: 0xFFFFFF
 
         # =====================================================================
-        # 4. GARAGE DOOR                     col 11 span 2 | row 1 span 5
+        # 3b. GARAGE DOOR LOCK               col 10 span 1 | row 1 span 5
+        # =====================================================================
+        - obj:
+            styles: cell_style
+            scrollable: false
+            grid_cell_column_pos: 10
+            grid_cell_row_pos: 1
+            grid_cell_column_span: 1
+            grid_cell_row_span: 5
+            grid_cell_x_align: STRETCH
+            grid_cell_y_align: STRETCH
+            widgets:
+              - obj:
+                  id: card_garage_lock
+                  styles: card_style
+                  width: 100%
+                  height: 100%
+                  scrollable: false
+                  clip_corner: true
+                  widgets:
+                    - image:
+                        src: img_smart_lock
+                        align: CENTER
+                    - label:
+                        align: TOP_MID
+                        y: 8
+                        text: "Garage"
+                        text_font: font_small
+                        text_color: 0xFFFFFF
+                    - button:
+                        id: garage_lock_btn
+                        styles: round_btn
+                        align: BOTTOM_MID
+                        y: -12
+                        width: 48
+                        height: 48
+                        bg_color: 0x7A2A2A          # unlocked
+                        checked:
+                          bg_color: 0x0F5B44        # locked
+                        on_click:
+                          - if:
+                              condition:
+                                text_sensor.state:
+                                  id: garage_lock_state
+                                  state: "locked"
+                              then:
+                                - homeassistant.action:
+                                    action: lock.unlock
+                                    data:
+                                      entity_id: ${garage_lock_entity}
+                              else:
+                                - homeassistant.action:
+                                    action: lock.lock
+                                    data:
+                                      entity_id: ${garage_lock_entity}
+                        widgets:
+                          - label:
+                              id: garage_lock_icon       # locked / unlocked icon
+                              align: CENTER
+                              text: "\U000F033E"
+                              text_font: font_mdi_24
+                              text_color: 0xFFFFFF
+
+        # =====================================================================
+        # 4. GARAGE Roller DOOR                     col 11 span 2 | row 1 span 5
         # =====================================================================
         - obj:
             styles: cell_style
@@ -1315,17 +1409,25 @@ lvgl:
                   scrollable: false
                   widgets:
                     - label:
+                        x: 32
+                        y: 10
+                        text: "Garage Roller Door"
+                        text_font: font_small
+                    - label:
                         id: garage_icon
                         styles: icon_24
                         x: 12
                         y: 10
                         text: "\U000F06D9"
+                    # Open / Closed, under the title
                     - label:
-                        x: 44
-                        y: 12
-                        text: "Garage Door"
+                        id: garage_status_label
+                        align: TOP_MID          # centred in card_garage, any text width
+                        y: 30
+                        text: "--"
                         text_font: font_small
-                    - obj:          # door position: percentage + bar
+                        text_color: 0xAAB8EE
+                    - obj:          # door position: roller-door slats
                         align: TOP_MID
                         id: garage_position_container
                         y: 52
@@ -1369,25 +1471,16 @@ lvgl:
                                 - obj: {styles: garage_slat}
                                 - obj: {styles: garage_slat}
                                 - obj: {styles: garage_slat}
-                          - label:
-                              id: garage_position_label
-                              align: CENTER
-                              text: "--%"
-                              text_font: font_title
-                              text_color: 0xFFFFFF
-                              bg_color: 0x0F1B40
-                              bg_opa: 75%
-                              radius: 6
-                              pad_left: 6
-                              pad_right: 6
+                    
+                    # Door position, left of the control button
                     - label:
-                        id: garage_status_label
-                        align: BOTTOM_LEFT
-                        x: 14
-                        y: -30
-                        text: "--"
-                        text_font: font_small
-                        text_color: 0xAAB8EE
+                        id: garage_position_label
+                        align: BOTTOM_RIGHT
+                        x: -100
+                        y: -20
+                        text: "--%"
+                        text_font: font_title
+                        text_color: 0xFFFFFF
                     # One button for the controller's next action (Up / Stop /
                     # Down); garage_update_button sets its icon and colour.
                     - button:
@@ -1490,15 +1583,6 @@ lvgl:
                               bg_color: 0x7C83FF
                               border_width: 0
                               radius: 1
-                          - label:
-                              id: call_idle_destination_label
-                              align: TOP_MID
-                              y: 44
-                              width: 210
-                              text: "Destination"
-                              text_color: 0x8A94A6
-                              text_font: font_small
-                              text_align: CENTER
                           - label:
                               id: call_idle_peer_label
                               align: TOP_MID
@@ -2096,7 +2180,7 @@ lvgl:
                         scrollable: false
                         widgets:
                           - label: {styles: icon_24, x: 10, y: 8, text: "\U000F04B9"}
-                          - label: {x: 42, y: 12, text: "Living Room", text_font: font_small, text_color: 0xFFFFFF}
+                          - label: {x: 42, y: 8, text: "Living Room", text_font: font_small, text_color: 0xFFFFFF}
                           - label:
                               id: temp_living_label
                               align: BOTTOM_LEFT
@@ -2116,7 +2200,7 @@ lvgl:
                         scrollable: false
                         widgets:
                           - label: {styles: icon_24, x: 10, y: 8, text: "\U000F02E3"}
-                          - label: {x: 42, y: 12, text: "Bedroom", text_font: font_small, text_color: 0xFFFFFF}
+                          - label: {x: 42, y: 8, text: "Bedroom", text_font: font_small, text_color: 0xFFFFFF}
                           - label:
                               id: temp_bedroom_label
                               align: BOTTOM_LEFT
@@ -2131,12 +2215,12 @@ lvgl:
                         y: 138
                         width: 173
                         height: 80
-                        bg_color: 0x3A3326
-                        border_color: 0x6A5A3A
+                        bg_color: 0xB45309          # amber
+                        border_color: 0xF59E0B      # lighter amber edge
                         scrollable: false
                         widgets:
                           - label: {styles: icon_24, x: 10, y: 8, text: "\U000F0599"}
-                          - label: {x: 42, y: 12, text: "Outdoor", text_font: font_small, text_color: 0xFFFFFF}
+                          - label: {x: 42, y: 8, text: "Outdoor", text_font: font_small, text_color: 0xFFFFFF}
                           - label:
                               id: temp_outdoor_label
                               align: BOTTOM_LEFT
@@ -2156,7 +2240,7 @@ lvgl:
                         scrollable: false
                         widgets:
                           - label: {styles: icon_24, x: 10, y: 8, text: "\U000F058C"}
-                          - label: {x: 42, y: 12, text: "Humidity", text_font: font_small, text_color: 0xFFFFFF}
+                          - label: {x: 42, y: 8, text: "Humidity", text_font: font_small, text_color: 0xFFFFFF}
                           - label:
                               id: humidity_label
                               align: BOTTOM_LEFT
@@ -2208,13 +2292,19 @@ lvgl:
                         clip_corner: true
                         scrollable: false
                         bg_color: 0x000000
+                        clickable: true                 # tap opens the Cameras page
+                        on_click:
+                          - lvgl.page.show:
+                              id: cameras_page
+                              animation: MOVE_LEFT
+                              time: 250ms
                         widgets:
                           - canvas:
                               id: cam_canvas
                               x: 0
                               y: 0
                               width: 320
-                              height: 150
+                              height: 240
                           - obj:
                               align: BOTTOM_MID
                               width: 100%
@@ -2223,11 +2313,12 @@ lvgl:
                               border_width: 0
                               bg_color: 0x0A1330
                               bg_opa: 85%
+                              clickable: false            # let taps reach the tile
                               scrollable: false
                               widgets:
-                                - obj: {align: LEFT_MID, x: 8, width: 9, height: 9, radius: 5, border_width: 0, bg_color: 0x1FDC8A}
+                                - obj: {align: LEFT_MID, x: 8, width: 9, height: 9, radius: 5, border_width: 0, bg_color: 0x1FDC8A, clickable: false}
                                 - label: {align: LEFT_MID, x: 26, text: "Front Door", text_font: font_small, text_color: 0xFFFFFF}
-                    - obj:          # Driveway
+                    - obj:          # Driveway: live RTSP feed (esp_rtsp_stream driveway_cam)
                         id: cam_driveway
                         x: 345
                         y: 44
@@ -2235,12 +2326,23 @@ lvgl:
                         height: 150
                         radius: 10
                         border_width: 0
+                        pad_all: 0          # default padding left a grey band left/top
                         clip_corner: true
                         scrollable: false
-                        bg_color: 0x5A5A60
-                        bg_grad_color: 0x4A5A44
-                        bg_grad_dir: HOR
+                        bg_color: 0x000000
+                        clickable: true                 # tap opens the Cameras page
+                        on_click:
+                          - lvgl.page.show:
+                              id: cameras_page
+                              animation: MOVE_LEFT
+                              time: 250ms
                         widgets:
+                          - canvas:
+                              id: cam_driveway_canvas
+                              x: 0
+                              y: 0
+                              width: 320
+                              height: 240
                           - obj:
                               align: BOTTOM_MID
                               width: 100%
@@ -2249,9 +2351,10 @@ lvgl:
                               border_width: 0
                               bg_color: 0x0A1330
                               bg_opa: 85%
+                              clickable: false            # let taps reach the tile
                               scrollable: false
                               widgets:
-                                - obj: {align: LEFT_MID, x: 8, width: 9, height: 9, radius: 5, border_width: 0, bg_color: 0x1FDC8A}
+                                - obj: {align: LEFT_MID, x: 8, width: 9, height: 9, radius: 5, border_width: 0, bg_color: 0x1FDC8A, clickable: false}
                                 - label: {align: LEFT_MID, x: 26, text: "Driveway", text_font: font_small, text_color: 0xFFFFFF}
 
         # =====================================================================
@@ -2351,6 +2454,80 @@ lvgl:
                           - label: {align: BOTTOM_MID, y: -26, text: "Movie", text_font: font_body}
 
         # ---- row 17: bottom half grid intentionally empty -------------------
+
+    # ==================================================================
+    # CAMERAS: front door and driveway side by side at 640x480 (full screen
+    # width). Opened from the sidebar or by tapping a home page camera tile;
+    # Home button or swipe right returns. Streams front_door_full /
+    # driveway_full only run while this page is shown.
+    # ==================================================================
+    - id: cameras_page
+      bg_color: 0x08112B
+      scrollable: false
+      on_swipe_right:
+        - lvgl.page.show:
+            id: home_page
+            animation: MOVE_RIGHT
+            time: 250ms
+      widgets:
+        - button:
+            id: cameras_back_btn
+            styles: scene_btn
+            x: 16
+            y: 14
+            width: 120
+            height: 48
+            on_click:
+              - lvgl.page.show:
+                  id: home_page
+                  animation: MOVE_RIGHT
+                  time: 250ms
+            widgets:
+              - label: {align: CENTER, text: "<  Home", text_font: font_body, text_color: 0xFFFFFF}
+        - label:
+            align: TOP_MID
+            y: 20
+            text: "Cameras"
+            text_font: font_ui_medium
+            text_color: 0xFFFFFF
+        - obj:              # Front door, 640x480
+            x: 0
+            y: 96
+            width: 640
+            height: 480
+            radius: 0
+            border_width: 0
+            pad_all: 0
+            scrollable: false
+            bg_color: 0x000000
+            widgets:
+              - canvas:
+                  id: cam_front_full_canvas
+                  x: 0
+                  y: 0
+                  width: 640
+                  height: 480
+        - obj:              # Driveway, 640x480
+            x: 640
+            y: 96
+            width: 640
+            height: 480
+            radius: 0
+            border_width: 0
+            pad_all: 0
+            scrollable: false
+            bg_color: 0x000000
+            widgets:
+              - canvas:
+                  id: cam_driveway_full_canvas
+                  x: 0
+                  y: 0
+                  width: 640
+                  height: 480
+        - obj: {x: 20, y: 600, width: 12, height: 12, radius: 6, border_width: 0, bg_color: 0x1FDC8A}
+        - label: {x: 42, y: 592, text: "Front Door", text_font: font_ui_medium, text_color: 0xFFFFFF}
+        - obj: {x: 660, y: 600, width: 12, height: 12, radius: 6, border_width: 0, bg_color: 0x1FDC8A}
+        - label: {x: 682, y: 592, text: "Driveway", text_font: font_ui_medium, text_color: 0xFFFFFF}
 
     # ==================================================================
     # SETTINGS: one scrollable landscape page. Opened from the sidebar or a
@@ -2765,24 +2942,15 @@ lvgl:
         # top of the scrolling settings list.
         - button:
             id: settings_back_btn
-            align: TOP_LEFT
-            x: 8
-            y: 8
-            width: 20
-            height: 15
-            radius: 4
-            pad_all: 0
-            bg_color: 0x4A3DF0
-            border_width: 0
-            shadow_width: 0
+            styles: scene_btn          # same as the Cameras page Home button
+            x: 16
+            y: 14
+            width: 120
+            height: 48
             on_click:
               - script.execute: close_settings_page
             widgets:
-              - label:
-                  align: CENTER
-                  text: "<"
-                  text_font: font_small
-                  text_color: 0xFFFFFF
+              - label: {align: CENTER, text: "<  Home", text_font: font_body, text_color: 0xFFFFFF}
 
     # ==================================================================
     # VIDEO CALL: p4_video_renderer draws the remote picture directly into
@@ -2893,34 +3061,34 @@ script:
           uint32_t wifi_color = 0xEF4444;
           char wifi_text[16] = "Offline";
           if (up) {
-            const int rssi = wifi::global_wifi_component->wifi_rssi();
+            // Signal in % from the wifi_signal_pct sensor: 2 x (dBm + 100).
+            const float pct = id(wifi_signal_pct).state;
             wifi_color = 0x27D98D;
-            if (rssi >= 0 || rssi < -100) {
-              // Not every esp-hosted build reports RSSI.
-              wifi_icon = "\U000F0928";
+            if (std::isnan(pct)) {
+              wifi_icon = "\U000F0928";               // no reading yet
               snprintf(wifi_text, sizeof(wifi_text), "Wi-Fi");
             } else {
-              wifi_icon = rssi > -55 ? "\U000F0928" : rssi > -67 ? "\U000F0925" :
-                          rssi > -78 ? "\U000F0922" : "\U000F091F";
-              if (rssi <= -78) wifi_color = 0xF59E0B;
-              snprintf(wifi_text, sizeof(wifi_text), "%d dBm", rssi);
+              wifi_icon = pct >= 80 ? "\U000F0928" : pct >= 60 ? "\U000F0925" :
+                          pct >= 40 ? "\U000F0922" : "\U000F091F";
+              if (pct < 40) wifi_color = 0xF59E0B;
+              snprintf(wifi_text, sizeof(wifi_text), "%.0f%%", pct);
             }
           }
           lv_label_set_text(id(status_wifi_icon), wifi_icon);
           lv_obj_set_style_text_color(id(status_wifi_icon), lv_color_hex(wifi_color), LV_PART_MAIN);
           lv_label_set_text(id(status_wifi_label), wifi_text);
 
-          const auto &c6 = id(esp32_c6_coprocessor_update);
-          const bool c6_update = c6.state == update::UPDATE_STATE_AVAILABLE;
+          const auto *c6 = id(esp32_c6_coprocessor_update);
+          const bool c6_update = c6->state == update::UPDATE_STATE_AVAILABLE;
           std::string c6_text = "C6 ";
-          c6_text += c6.update_info.current_version.empty() ? (up ? "OK" : "--")
-                                                            : c6.update_info.current_version;
+          c6_text += c6->update_info.current_version.empty() ? (up ? "OK" : "--")
+                                                             : c6->update_info.current_version;
           if (c6_update) c6_text += " (update)";
           const uint32_t c6_color = !up ? 0xEF4444 : c6_update ? 0xF59E0B : 0x27D98D;
           lv_label_set_text(id(status_c6_label), c6_text.c_str());
           lv_obj_set_style_text_color(id(status_c6_icon), lv_color_hex(c6_color), LV_PART_MAIN);
 
-  # Reads the daily maximum of ${energy_daily_entity} (its 11:59 pm value)
+  # Reads the daily change of ${energy_daily_entity} (its 11:59 pm value)
   # for the last 14 completed days from Home Assistant long-term statistics.
   - id: fetch_energy_history
     mode: single
@@ -2931,13 +3099,25 @@ script:
               - api.connected:
               - time.has_time:
                   id: my_time
+          else:
+            - logger.log:
+                level: WARN
+                tag: energy
+                format: "Skipped: API connected=%d, time valid=%d"
+                args: ['(int) api::global_api_server->is_connected()', '(int) id(my_time).now().is_valid()']
           then:
+            - logger.log:
+                tag: energy
+                format: "Requesting 14 days of ${energy_daily_entity} from HA"
             - homeassistant.action:
                 action: recorder.get_statistics
                 data:
                   statistic_ids: ${energy_daily_entity}
                   period: day
-                  types: max
+                  # The meter is total_increasing, so statistics keep only
+                  # state/sum (no max). "change" = energy used that day, i.e.
+                  # the 11:59 pm reading; HA handles the midnight reset.
+                  types: change
                   # Local midnight 14 days ago up to local midnight today.
                   start_time: !lambda |-
                     const auto now = id(my_time).now();
@@ -2958,8 +3138,15 @@ script:
                       const int first = n > 14 ? n - 14 : 0;
                       int slot = 14 - (n - first);
                       for (int i = first; i < n; i++)
-                        id(energy_history)[slot++] = rows[i]["max"] | NAN;
+                        id(energy_history)[slot++] = rows[i]["change"] | NAN;
                       ESP_LOGI("energy", "Loaded %d days of %s", n - first, "${energy_daily_entity}");
+                      if (n == 0) {
+                        // Show what HA actually sent, to see why there are no rows.
+                        std::string raw;
+                        serializeJson(response, raw);
+                        if (raw.size() > 400) raw.resize(400);
+                        ESP_LOGW("energy", "No rows. Response: %s", raw.c_str());
+                      }
                   - script.execute: draw_energy_bars
                 on_error:
                   - logger.log:
@@ -3126,14 +3313,15 @@ script:
           }
 
   # Back to the home page (from the video page, or when a call needs it). The
-  # settings page stays open while the phone is idle.
+  # settings and cameras pages stay open while the phone is idle.
   - id: show_phone_page
     mode: restart
     then:
       - lambda: |-
           lv_obj_t *scr = lv_disp_get_scr_act(nullptr);
-          const bool keep_settings = scr == id(settings_p4_page)->obj && id(phone).is_idle();
-          if (scr != id(home_page)->obj && !keep_settings)
+          const bool keep_page = (scr == id(settings_p4_page)->obj ||
+                                  scr == id(cameras_page)->obj) && id(phone).is_idle();
+          if (scr != id(home_page)->obj && !keep_page)
             lv_disp_load_scr(id(home_page)->obj);
       - script.execute: update_call_tile
 
@@ -3301,24 +3489,15 @@ script:
                 static_cast<unsigned>(id(phone).get_contact_count()));
             return std::string(buf);
 
-  # NS4150 amplifier: on only while a call is active/ringing or the Speaker
-  # media player is playing, and not muted. Left on while idle it amplifies
-  # the DAC's idle noise into an audible squeal. Off is delayed 1 s so the
-  # tail of a sound is not cut and back-to-back sounds do not click.
-  - id: speaker_amp_update
+  # NS4150 amplifier power-down, started by esp_audio_stack on_amplifier_idle
+  # and cancelled by on_amplifier_required. Left on while idle the amp turns
+  # the DAC's idle noise into an audible squeal; the 2 s delay keeps sound
+  # tails and back-to-back sounds (ringtone loop) from being cut or clicking.
+  - id: speaker_amp_idle_off
     mode: restart
     then:
-      - if:
-          condition:
-            lambda: |-
-              return !id(speaker_mute).state &&
-                     (!id(phone).is_idle() ||
-                      id(speaker_player).state != media_player::MEDIA_PLAYER_STATE_IDLE);
-          then:
-            - output.turn_on: speaker_enable
-          else:
-            - delay: 1s
-            - output.turn_off: speaker_enable
+      - delay: 2s
+      - output.turn_off: speaker_enable
 
   # Garage button shows the controller's next action: Stop (red), Down, or Up.
   - id: garage_update_button
@@ -3382,18 +3561,6 @@ binary_sensor:
           - switch.toggle: mute
 
   # Garage roller door (see the garage_* substitutions)
-  - platform: homeassistant
-    id: garage_door_open
-    entity_id: ${garage_status_entity}
-    internal: true
-    on_state:
-      - lvgl.label.update:
-          id: garage_icon
-          text: !lambda 'return std::string(x ? "\U000F06DA" : "\U000F06D9");'
-      - lvgl.label.update:
-          id: garage_status_label
-          text: !lambda 'return std::string(x ? "Open" : "Closed");'
-
   - platform: homeassistant
     id: garage_next_up
     entity_id: ${garage_next_up_entity}
@@ -3476,8 +3643,22 @@ switch:
           level: INFO
           tag: mute
           format: "Speaker mute OFF: DAC unmuted, amplifier follows playback"
+      - if:
+          condition:
+            speaker.is_playing: hw_speaker
+          then:
+            - output.turn_on: speaker_enable
+            - delay: 50ms
       - speaker.mute_off: hw_speaker
-      - script.execute: speaker_amp_update
+
+button:
+  # Re-reads the 14-day energy history from HA (also runs on connect and at 00:05).
+  - platform: template
+    name: Refresh Energy History
+    icon: mdi:chart-bar
+    entity_category: diagnostic
+    on_press:
+      - script.execute: fetch_energy_history
 
 select:
   - platform: template
@@ -3535,6 +3716,26 @@ select:
           id(aec_mode_select).publish_state(id(afe_processor).get_mode_name());
 
 sensor:
+  # Wi-Fi signal (dBm) and the same as a percentage; the status bar shows %.
+  - platform: wifi_signal
+    name: "WiFi Signal dB"
+    id: wifi_signal_db
+    update_interval: 60s
+    entity_category: "diagnostic"
+
+  - platform: copy # WiFi signal in %
+    source_id: wifi_signal_db
+    id: wifi_signal_pct
+    name: "WiFi Signal Percent"
+    filters:
+      - lambda: return min(max(2 * (x + 100.0), 0.0), 100.0);
+    unit_of_measurement: "%"
+    entity_category: "diagnostic"
+    device_class: ""
+    on_value:
+      then:
+        - script.execute: update_status_bar
+
   - platform: homeassistant
     id: garage_position
     entity_id: ${garage_position_entity}
@@ -3552,6 +3753,10 @@ sensor:
           if (pos > 100) pos = 100;
           const int full = lv_obj_get_content_height(id(garage_position_container));
           lv_obj_set_height(id(garage_door_curtain), full * (100 - pos) / 100);
+          // Status and icon from the position: 0-3 % closed, 97-100 % open.
+          const char *status = pos <= 3 ? "Closed" : pos >= 97 ? "Open" : "Partly open";
+          lv_label_set_text(id(garage_status_label), status);
+          lv_label_set_text(id(garage_icon), pos <= 3 ? "\U000F06D9" : "\U000F06DA");
 
   - platform: homeassistant
     id: ha_power
@@ -3617,8 +3822,16 @@ text_sensor:
     id: cam_url
     entity_id: input_text.esp_camera_url
     on_value:
-      - lambda: id(front_door).set_url(x);
-
+      - lambda: |-
+          id(front_door).set_url(x);
+          id(front_door_full).set_url(x);
+  - platform: homeassistant
+    id: cam_url_driveway
+    entity_id: input_text.esp_camera_url_driveway
+    on_value:
+      - lambda: |-
+          id(driveway_cam).set_url(x);
+          id(driveway_full).set_url(x);
   # Heater hvac mode -> highlight the matching mode button
   - platform: homeassistant
     id: heater_mode
@@ -3655,6 +3868,19 @@ text_sensor:
           id: front_lock_icon
           text: !lambda 'return std::string(x == "locked" ? "\U000F033E" : "\U000F033F");'
 
+  - platform: homeassistant
+    id: garage_lock_state
+    entity_id: ${garage_lock_entity}
+    internal: true
+    on_value:
+      - lvgl.widget.update:
+          id: garage_lock_btn
+          state:
+            checked: !lambda 'return x == "locked";'
+      - lvgl.label.update:
+          id: garage_lock_icon
+          text: !lambda 'return std::string(x == "locked" ? "\U000F033E" : "\U000F033F");'
+
 interval:
   # Top-right Wi-Fi / C6 status
   - interval: 10s
@@ -3677,4 +3903,4 @@ interval:
                 text: !lambda 'return id(my_time).now().strftime("%A");'
             - lvgl.label.update:
                 id: clock_date_label
-                text: !lambda 'return id(my_time).now().strftime("%d %B %Y");'
+                text: !lambda 'return id(my_time).now().strftime("%d %B");'
