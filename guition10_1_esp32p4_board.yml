@@ -32,7 +32,8 @@
 #   - BOOT button GPIO35
 #
 # Touch UI:
-#   Home page:     HA dashboard, Intercom card (VoIP), Front Door RTSP feed
+#   Home page:     HA dashboard, Intercom card (VoIP), Frigate snapshots
+#   Camera pages:  live RTSP, one camera per page (sidebar or tap a snapshot)
 #   Settings page: sidebar Settings or swipe up; swipe down to return
 #   Video call:    full-width remote video with a hang-up strip
 #   BOOT button:   short press answers / calls / hangs up, long press mic mute
@@ -115,7 +116,9 @@ substitutions:
   # ---------------------------------------------------------------------------
   # Home Assistant entities shown on the home page
   # ---------------------------------------------------------------------------
-  heater_entity: climate.rinnai_touch
+  # Gas heater: the Rinnai Touch power and circulation fan switches.
+  heater_power_switch: switch.rinnai_touch_on_off_switch
+  heater_fan_switch: switch.rinnai_touch_circulation_fan_switch
   front_lock_entity: lock.frontdoor_aqara
   garage_lock_entity: lock.garagedoor_aqara
   # Garage roller door: position sensor (also gives Open/Closed), the "next
@@ -139,6 +142,12 @@ substitutions:
   scene_home_entity: scene.back_home
   scene_night_entity: scene.sleep
   scene_movie_entity: scene.movie_night
+  scene_cat_away_entity: scene.cat_away
+  # Frigate "last person" snapshots for the home page camera tiles, fetched
+  # from HA's image proxy. ha_base_url must be reachable from this device.
+  ha_base_url: "http://homeassistant.local:8123"
+  snapshot_front_entity: image.porchdahuafrigate_person
+  snapshot_driveway_entity: image.garagecamera_person
 
 # Shared packages: P4 base/hosted Wi-Fi, VoIP transport and settings, JPEG
 # video path, audio controls and the ringtone playback components.
@@ -241,33 +250,18 @@ external_components:
     components: [esp_rtsp_stream]
     refresh: 1d
 
-# RTSP camera feed, drawn into cam_canvas in the home page Security Cameras
-# card. The URL comes from Home Assistant (cam_url text sensor).
+# Live RTSP feeds, only on the two camera pages (the home page shows Frigate
+# snapshots instead). A stream only connects while its canvas is on screen
+# and drops ~3 s after it is hidden, so at most one camera streams at a time.
+# The URLs come from Home Assistant (cam_url / cam_url_driveway text sensors).
 esp_rtsp_stream:
-  - id: front_door
-    username: viewer                   # default login when the URL has none
-    password: !secret camera_password
-    lvgl_canvas: cam_canvas
-    max_fps: 7                         # optional, default from chip profile
-    max_frame_size: 262144             # optional, bytes per JPEG frame
-    log_frame_info: true               # fps/decode stats every 30 s
-  - id: driveway_cam
-    username: viewer                   # default login when the URL has none
-    password: !secret camera_password
-    lvgl_canvas: cam_driveway_canvas
-    max_fps: 7                         # optional, default from chip profile
-    max_frame_size: 262144             # optional, bytes per JPEG frame
-    log_frame_info: true
-  # Cameras page: the same two cameras at 640x480. A stream only connects
-  # while its canvas is on screen (and drops ~3 s after it is hidden), so the
-  # home tiles and these never pull from a camera at the same time.
   - id: front_door_full
-    username: viewer
+    username: viewer                   # default login when the URL has none
     password: !secret camera_password
     lvgl_canvas: cam_front_full_canvas
     max_fps: 10
-    max_frame_size: 262144
-    log_frame_info: true
+    max_frame_size: 262144             # bytes per JPEG frame
+    log_frame_info: true               # fps/decode stats every 30 s
   - id: driveway_full
     username: viewer
     password: !secret camera_password
@@ -275,6 +269,51 @@ esp_rtsp_stream:
     max_fps: 10
     max_frame_size: 262144
     log_frame_info: true
+
+# Home page camera tiles: the latest Frigate person snapshot from Home
+# Assistant's image entities, downloaded through HA's image proxy whenever the
+# entity updates (see the snapshot text sensors).
+http_request:
+  verify_ssl: false
+  timeout: 10s
+
+online_image:
+  - id: snap_front_img
+    url: ${ha_base_url}/
+    format: JPEG
+    type: RGB565
+    resize: 320x240
+    update_interval: never
+    buffer_size: 65536
+    on_download_finished:
+      - lvgl.image.update:
+          id: cam_front_snapshot
+          src: snap_front_img
+      - globals.set:
+          id: snap_front_loaded
+          value: "true"
+    on_error:
+      - logger.log:
+          level: WARN
+          format: "Front door snapshot download failed"
+  - id: snap_driveway_img
+    url: ${ha_base_url}/
+    format: JPEG
+    type: RGB565
+    resize: 320x240
+    update_interval: never
+    buffer_size: 65536
+    on_download_finished:
+      - lvgl.image.update:
+          id: cam_driveway_snapshot
+          src: snap_driveway_img
+      - globals.set:
+          id: snap_driveway_loaded
+          value: "true"
+    on_error:
+      - logger.log:
+          level: WARN
+          format: "Driveway snapshot download failed"
 # =============================================================================
 # CONNECTIVITY
 # =============================================================================
@@ -366,6 +405,9 @@ time:
   - platform: homeassistant
     id: my_time
     timezone: Australia/Sydney
+    # Show the clock as soon as the time is known, not at the next 45 s tick.
+    on_time_sync:
+      - script.execute: update_clock
     on_time:
       # Just after midnight yesterday's total is final: refresh the 14 bars.
       - seconds: 0
@@ -397,6 +439,10 @@ esp_video_camera:
   id: p4_camera
   buffer_count: 2
   enable_xclk: false
+  # Not exposed to Home Assistant: HA polling the "P4 Camera" entity kept the
+  # sensor capturing all the time. It now only runs for VoIP video; the
+  # "Camera" switch shows and controls that.
+  internal: true
 
 # =============================================================================
 # OUTPUTS AND LIGHTS
@@ -636,6 +682,7 @@ voip_stack:
         text: "CALLING"
     - script.execute: backlight_timer
     - script.execute: update_call_tile
+    - script.execute: camera_call_start
 
   on_dest_ringing:
     - lambda: id(peer_name) = peer;
@@ -648,6 +695,7 @@ voip_stack:
     - lambda: id(peer_name) = peer;
     - script.execute: backlight_timer
     - script.execute: show_phone_page
+    - script.execute: camera_call_start
     - script.execute: voip_start_ringtone
 
   on_in_call:
@@ -658,6 +706,10 @@ voip_stack:
   on_idle:
     - script.execute: voip_stop_ringtone
     - script.execute: show_phone_page
+    # Call over: camera off. Video stays offered for the next call.
+    - switch.template.publish:
+        id: camera_switch
+        state: false
 
   on_hangup:
     - script.execute: voip_stop_ringtone
@@ -832,6 +884,7 @@ font:
       - "\U000F032A"
       - "\U000F02DC"
       - "\U000F0FCE"  # movie-open
+      - "\U000F011B"  # cat
       - "\U000F0737"  # arrow-up-bold
       - "\U000F0666"  # stop-circle
       - "\U000F072E"  # arrow-down-bold
@@ -913,7 +966,7 @@ lvgl:
       radius: 12
       pad_all: 0
     - id: ebar
-      width: 12
+      width: 10
       height: 4
       radius: 2
       border_width: 0
@@ -1038,7 +1091,7 @@ lvgl:
                   height: 84
                   on_click:
                     - lvgl.page.show:
-                        id: cameras_page
+                        id: cam_front_page
                         animation: MOVE_LEFT
                         time: 250ms
                   widgets:
@@ -1170,9 +1223,9 @@ lvgl:
                         bg_color: 0x6A3DFF
                         on_click:
                           - homeassistant.action:
-                              action: homeassistant.toggle
+                              action: switch.toggle
                               data:
-                                entity_id: ${heater_entity}
+                                entity_id: ${heater_power_switch}
                         widgets:
                           - label:
                               align: CENTER
@@ -1194,70 +1247,58 @@ lvgl:
                           flex_align_main: SPACE_BETWEEN
                           flex_align_cross: CENTER
                         widgets:
+                          # Rinnai Touch switches (as in the HA dashboard):
+                          # Off = heater and fan off, Heat = heater on,
+                          # Fan = circulation fan on.
                           - button:
                               id: heater_btn_off
                               styles: mode_btn
-                              width: 82
+                              width: 110
                               height: 40
                               checked:
                                 bg_color: 0x5A3DF0
                                 border_color: 0x7B66FF
                               on_click:
                                 - homeassistant.action:
-                                    action: climate.set_hvac_mode
+                                    action: switch.turn_off
                                     data:
-                                      entity_id: ${heater_entity}
-                                      hvac_mode: "off"
+                                      entity_id: ${heater_power_switch}
+                                - homeassistant.action:
+                                    action: switch.turn_off
+                                    data:
+                                      entity_id: ${heater_fan_switch}
                               widgets:
                                 - label: {align: CENTER, text: "Off", text_font: font_small}
                           - button:
                               id: heater_btn_heat
                               styles: mode_btn
-                              width: 82
+                              width: 110
                               height: 40
                               checked:
                                 bg_color: 0x5A3DF0
                                 border_color: 0x7B66FF
                               on_click:
                                 - homeassistant.action:
-                                    action: climate.set_hvac_mode
+                                    action: switch.turn_on
                                     data:
-                                      entity_id: ${heater_entity}
-                                      hvac_mode: "heat"
+                                      entity_id: ${heater_power_switch}
                               widgets:
                                 - label: {align: CENTER, text: "Heat", text_font: font_small}
                           - button:
                               id: heater_btn_fan
                               styles: mode_btn
-                              width: 82
+                              width: 110
                               height: 40
                               checked:
                                 bg_color: 0x5A3DF0
                                 border_color: 0x7B66FF
                               on_click:
                                 - homeassistant.action:
-                                    action: climate.set_hvac_mode
+                                    action: switch.turn_on
                                     data:
-                                      entity_id: ${heater_entity}
-                                      hvac_mode: "fan_only"
+                                      entity_id: ${heater_fan_switch}
                               widgets:
                                 - label: {align: CENTER, text: "Fan", text_font: font_small}
-                          - button:
-                              id: heater_btn_auto
-                              styles: mode_btn
-                              width: 82
-                              height: 40
-                              checked:
-                                bg_color: 0x5A3DF0
-                                border_color: 0x7B66FF
-                              on_click:
-                                - homeassistant.action:
-                                    action: climate.set_hvac_mode
-                                    data:
-                                      entity_id: ${heater_entity}
-                                      hvac_mode: "heat_cool"
-                              widgets:
-                                - label: {align: CENTER, text: "Auto", text_font: font_small}
 
         # =====================================================================
         # 3. FRONT DOOR LOCK                 col 9 span 1 | row 1 span 5
@@ -1284,6 +1325,7 @@ lvgl:
                     - image:
                         src: img_smart_lock
                         align: CENTER
+                        y: -10
                     - label:
                         align: TOP_MID
                         y: 8
@@ -1348,6 +1390,7 @@ lvgl:
                     - image:
                         src: img_smart_lock
                         align: CENTER
+                        y: -10
                     - label:
                         align: TOP_MID
                         y: 8
@@ -1409,9 +1452,9 @@ lvgl:
                   scrollable: false
                   widgets:
                     - label:
-                        x: 32
+                        x: 42
                         y: 10
-                        text: "Garage Roller Door"
+                        text: "Garage Roller"
                         text_font: font_small
                     - label:
                         id: garage_icon
@@ -1419,14 +1462,6 @@ lvgl:
                         x: 12
                         y: 10
                         text: "\U000F06D9"
-                    # Open / Closed, under the title
-                    - label:
-                        id: garage_status_label
-                        align: TOP_MID          # centred in card_garage, any text width
-                        y: 30
-                        text: "--"
-                        text_font: font_small
-                        text_color: 0xAAB8EE
                     - obj:          # door position: roller-door slats
                         align: TOP_MID
                         id: garage_position_container
@@ -1477,10 +1512,20 @@ lvgl:
                         id: garage_position_label
                         align: BOTTOM_RIGHT
                         x: -100
-                        y: -20
+                        y: -25
                         text: "--%"
                         text_font: font_title
                         text_color: 0xFFFFFF
+                    # Open / Closed / Partly open, under the percentage
+                    # (same right edge)
+                    - label:
+                        id: garage_status_label
+                        align: BOTTOM_RIGHT
+                        x: -100
+                        y: -4
+                        text: "--"
+                        text_font: font_small
+                        text_color: 0xAAB8EE
                     # One button for the controller's next action (Up / Stop /
                     # Down); garage_update_button sets its icon and colour.
                     - button:
@@ -1488,7 +1533,7 @@ lvgl:
                         styles: round_btn
                         align: BOTTOM_RIGHT
                         x: -12
-                        y: -10
+                        y: -5
                         width: 56
                         height: 56
                         bg_color: 0x3A4DE0
@@ -2061,16 +2106,58 @@ lvgl:
                         text: "Electricity"
                     # Daily energy for the last 14 completed days, oldest on
                     # the left. fetch_energy_history fills energy_history from
-                    # HA long-term statistics; draw_energy_bars scales the bars.
+                    # HA long-term statistics; draw_energy_bars scales the bars
+                    # and the Y axis (kWh) to the busiest day.
+                    - label:
+                        id: elec_axis_max
+                        x: 0
+                        y: 40
+                        width: 31
+                        text: ""
+                        text_align: RIGHT
+                        text_font: font_small
+                        text_color: 0xAAB8EE
+                    - label:
+                        id: elec_axis_mid
+                        x: 0
+                        y: 110
+                        width: 31
+                        text: ""
+                        text_align: RIGHT
+                        text_font: font_small
+                        text_color: 0xAAB8EE
+                    - label:
+                        x: 0
+                        y: 180
+                        width: 31
+                        text: "0"
+                        text_align: RIGHT
+                        text_font: font_small
+                        text_color: 0xAAB8EE
+                    - obj:          # Y axis line
+                        x: 35
+                        y: 48
+                        width: 2
+                        height: 140
+                        radius: 0
+                        border_width: 0
+                        bg_color: 0x2A3F86
+                    - label:        # axis unit, under the axis
+                        x: 11
+                        y: 200
+                        text: "kWh"
+                        text_font: font_small
+                        text_color: 0x667085
                     - obj:
                         id: elec_bars
-                        x: 14
+                        x: 43
                         y: 48
-                        width: 232
+                        width: 180          # 14 bars x 10 px + gaps; ends at x 223, clear of the ring (x ~256)
                         height: 140
                         bg_opa: TRANSP
                         border_width: 0
                         pad_all: 0
+                        pad_column: 0       # no theme gap: SPACE_BETWEEN alone spaces the bars
                         scrollable: false
                         layout:
                           type: flex
@@ -2093,11 +2180,15 @@ lvgl:
                           - obj: {id: ebar_11, styles: ebar}
                           - obj: {id: ebar_12, styles: ebar}
                           - obj: {id: ebar_13, styles: ebar}
+                    # Daily average, centred under the power ring
                     - label:
                         id: elec_hist_label
-                        x: 14
-                        y: 196
-                        text: "Last 14 days"
+                        align: RIGHT_MID
+                        x: -4
+                        y: 85
+                        width: 140
+                        text: ""
+                        text_align: CENTER
                         text_font: font_small
                         text_color: 0xAAB8EE
                     - obj:          # ring + live value
@@ -2280,7 +2371,7 @@ lvgl:
                         x: 48
                         y: 6
                         text: "Cameras"
-                    - obj:          # Front Door: live RTSP feed (esp_rtsp_stream front_door)
+                    - obj:          # Front Door: last Frigate person snapshot
                         id: cam_front
                         x: 12
                         y: 44
@@ -2292,33 +2383,46 @@ lvgl:
                         clip_corner: true
                         scrollable: false
                         bg_color: 0x000000
-                        clickable: true                 # tap opens the Cameras page
+                        clickable: true                 # tap opens the live Front Door page
                         on_click:
                           - lvgl.page.show:
-                              id: cameras_page
+                              id: cam_front_page
                               animation: MOVE_LEFT
                               time: 250ms
                         widgets:
-                          - canvas:
-                              id: cam_canvas
-                              x: 0
-                              y: 0
-                              width: 320
-                              height: 240
+                          - image:
+                              id: cam_front_snapshot
+                              src: snap_front_img
+                              align: CENTER
+                              x: 15                       # centred in the area right of the label strip
+                              clickable: false
+                          # Name strip on the left; text rotated 90° anticlockwise
+                          # (transform_rotation is clockwise, so 270), reading upwards.
                           - obj:
-                              align: BOTTOM_MID
-                              width: 100%
-                              height: 30
+                              align: LEFT_MID
+                              width: 30
+                              height: 100%
                               radius: 0
                               border_width: 0
+                              pad_all: 0
                               bg_color: 0x0A1330
                               bg_opa: 85%
                               clickable: false            # let taps reach the tile
                               scrollable: false
                               widgets:
-                                - obj: {align: LEFT_MID, x: 8, width: 9, height: 9, radius: 5, border_width: 0, bg_color: 0x1FDC8A, clickable: false}
-                                - label: {align: LEFT_MID, x: 26, text: "Front Door", text_font: font_small, text_color: 0xFFFFFF}
-                    - obj:          # Driveway: live RTSP feed (esp_rtsp_stream driveway_cam)
+                                - obj: {align: BOTTOM_MID, y: -8, width: 9, height: 9, radius: 5, border_width: 0, bg_color: 0x1FDC8A, clickable: false}
+                                - label:
+                                    align: CENTER
+                                    width: 100
+                                    height: 20
+                                    text: "Front Door"
+                                    text_align: CENTER
+                                    text_font: font_small
+                                    text_color: 0xFFFFFF
+                                    transform_rotation: 270
+                                    transform_pivot_x: 50
+                                    transform_pivot_y: 10
+                    - obj:          # Driveway: last Frigate person snapshot
                         id: cam_driveway
                         x: 345
                         y: 44
@@ -2330,32 +2434,43 @@ lvgl:
                         clip_corner: true
                         scrollable: false
                         bg_color: 0x000000
-                        clickable: true                 # tap opens the Cameras page
+                        clickable: true                 # tap opens the live Driveway page
                         on_click:
                           - lvgl.page.show:
-                              id: cameras_page
+                              id: cam_driveway_page
                               animation: MOVE_LEFT
                               time: 250ms
                         widgets:
-                          - canvas:
-                              id: cam_driveway_canvas
-                              x: 0
-                              y: 0
-                              width: 320
-                              height: 240
-                          - obj:
-                              align: BOTTOM_MID
-                              width: 100%
-                              height: 30
+                          - image:
+                              id: cam_driveway_snapshot
+                              src: snap_driveway_img
+                              align: CENTER
+                              x: 15
+                              clickable: false
+                          - obj:              # name strip, as on the Front Door tile
+                              align: LEFT_MID
+                              width: 30
+                              height: 100%
                               radius: 0
                               border_width: 0
+                              pad_all: 0
                               bg_color: 0x0A1330
                               bg_opa: 85%
                               clickable: false            # let taps reach the tile
                               scrollable: false
                               widgets:
-                                - obj: {align: LEFT_MID, x: 8, width: 9, height: 9, radius: 5, border_width: 0, bg_color: 0x1FDC8A, clickable: false}
-                                - label: {align: LEFT_MID, x: 26, text: "Driveway", text_font: font_small, text_color: 0xFFFFFF}
+                                - obj: {align: BOTTOM_MID, y: -8, width: 9, height: 9, radius: 5, border_width: 0, bg_color: 0x1FDC8A, clickable: false}
+                                - label:
+                                    align: CENTER
+                                    width: 100
+                                    height: 20
+                                    text: "Driveway"
+                                    text_align: CENTER
+                                    text_font: font_small
+                                    text_color: 0xFFFFFF
+                                    transform_rotation: 270
+                                    transform_pivot_x: 50
+                                    transform_pivot_y: 10
 
         # =====================================================================
         # 9. SCENES                          col 8 span 5 | row 12 span 5
@@ -2387,12 +2502,13 @@ lvgl:
                         x: 48
                         y: 6
                         text: "Scenes"
+                    # Four scenes, 105 px wide with 12 px gaps.
                     - button:
                         id: scene_home_btn
                         styles: scene_btn
                         x: 12
                         y: 46
-                        width: 144
+                        width: 105
                         height: 146
                         state:
                           checked: true
@@ -2404,18 +2520,16 @@ lvgl:
                               action: scene.turn_on
                               data:
                                 entity_id: ${scene_home_entity}
-                          - lvgl.widget.update: {id: scene_home_btn, state: {checked: true}}
-                          - lvgl.widget.update: {id: scene_night_btn, state: {checked: false}}
-                          - lvgl.widget.update: {id: scene_movie_btn, state: {checked: false}}
+                          - script.execute: {id: scene_select, which: 0}
                         widgets:
                           - label: {align: TOP_MID, y: 30, text: "\U000F02DC", text_font: font_mdi_36, text_color: 0xFFFFFF}
                           - label: {align: BOTTOM_MID, y: -26, text: "Home", text_font: font_body}
                     - button:
                         id: scene_night_btn
                         styles: scene_btn
-                        x: 168
+                        x: 129
                         y: 46
-                        width: 144
+                        width: 105
                         height: 146
                         checked:
                           bg_color: 0x4A3DF0
@@ -2425,18 +2539,16 @@ lvgl:
                               action: scene.turn_on
                               data:
                                 entity_id: ${scene_night_entity}
-                          - lvgl.widget.update: {id: scene_home_btn, state: {checked: false}}
-                          - lvgl.widget.update: {id: scene_night_btn, state: {checked: true}}
-                          - lvgl.widget.update: {id: scene_movie_btn, state: {checked: false}}
+                          - script.execute: {id: scene_select, which: 1}
                         widgets:
                           - label: {align: TOP_MID, y: 30, text: "\U000F0594", text_font: font_mdi_36, text_color: 0xB8A8FF}
                           - label: {align: BOTTOM_MID, y: -26, text: "Night", text_font: font_body}
                     - button:
                         id: scene_movie_btn
                         styles: scene_btn
-                        x: 324
+                        x: 246
                         y: 46
-                        width: 144
+                        width: 105
                         height: 146
                         checked:
                           bg_color: 0x4A3DF0
@@ -2446,24 +2558,47 @@ lvgl:
                               action: scene.turn_on
                               data:
                                 entity_id: ${scene_movie_entity}
-                          - lvgl.widget.update: {id: scene_home_btn, state: {checked: false}}
-                          - lvgl.widget.update: {id: scene_night_btn, state: {checked: false}}
-                          - lvgl.widget.update: {id: scene_movie_btn, state: {checked: true}}
+                          - script.execute: {id: scene_select, which: 2}
                         widgets:
                           - label: {align: TOP_MID, y: 30, text: "\U000F0FCE", text_font: font_mdi_36, text_color: 0xB8A8FF}
                           - label: {align: BOTTOM_MID, y: -26, text: "Movie", text_font: font_body}
+                    - button:
+                        id: scene_cat_away_btn
+                        styles: scene_btn
+                        x: 363
+                        y: 46
+                        width: 105
+                        height: 146
+                        checked:
+                          bg_color: 0x4A3DF0
+                          border_color: 0x7B66FF
+                        on_click:
+                          - homeassistant.action:
+                              action: scene.turn_on
+                              data:
+                                entity_id: ${scene_cat_away_entity}
+                          - script.execute: {id: scene_select, which: 3}
+                        widgets:
+                          - label: {align: TOP_MID, y: 30, text: "\U000F011B", text_font: font_mdi_36, text_color: 0xB8A8FF}
+                          - label: {align: BOTTOM_MID, y: -26, text: "Cat Away", text_font: font_body}
 
         # ---- row 17: bottom half grid intentionally empty -------------------
 
     # ==================================================================
-    # CAMERAS: front door and driveway side by side at 640x480 (full screen
-    # width). Opened from the sidebar or by tapping a home page camera tile;
-    # Home button or swipe right returns. Streams front_door_full /
-    # driveway_full only run while this page is shown.
+    # CAMERA PAGES: one live RTSP camera per screen, at the stream's own
+    # size (esp_rtsp_stream never upscales). Opened from the sidebar
+    # (Front Door) or by tapping a home page snapshot tile. Swipe left /
+    # right switches camera; "< Home" or swiping right past Front Door
+    # returns. Each stream only runs while its page is shown.
     # ==================================================================
-    - id: cameras_page
+    - id: cam_front_page
       bg_color: 0x08112B
       scrollable: false
+      on_swipe_left:
+        - lvgl.page.show:
+            id: cam_driveway_page
+            animation: MOVE_LEFT
+            time: 250ms
       on_swipe_right:
         - lvgl.page.show:
             id: home_page
@@ -2471,7 +2606,7 @@ lvgl:
             time: 250ms
       widgets:
         - button:
-            id: cameras_back_btn
+            id: cam_front_back_btn
             styles: scene_btn
             x: 16
             y: 14
@@ -2487,12 +2622,26 @@ lvgl:
         - label:
             align: TOP_MID
             y: 20
-            text: "Cameras"
+            text: "Front Door"
             text_font: font_ui_medium
             text_color: 0xFFFFFF
-        - obj:              # Front door, 640x480
-            x: 0
-            y: 96
+        - button:
+            styles: scene_btn
+            align: TOP_RIGHT
+            x: -16
+            y: 14
+            width: 150
+            height: 48
+            on_click:
+              - lvgl.page.show:
+                  id: cam_driveway_page
+                  animation: MOVE_LEFT
+                  time: 250ms
+            widgets:
+              - label: {align: CENTER, text: "Driveway  >", text_font: font_body, text_color: 0xFFFFFF}
+        - obj:              # Front door camera: 640x480 stream
+            align: CENTER
+            y: 38
             width: 640
             height: 480
             radius: 0
@@ -2507,11 +2656,55 @@ lvgl:
                   y: 0
                   width: 640
                   height: 480
-        - obj:              # Driveway, 640x480
-            x: 640
-            y: 96
-            width: 640
-            height: 480
+
+    - id: cam_driveway_page
+      bg_color: 0x08112B
+      scrollable: false
+      on_swipe_right:
+        - lvgl.page.show:
+            id: cam_front_page
+            animation: MOVE_RIGHT
+            time: 250ms
+      widgets:
+        - button:
+            id: cam_driveway_back_btn
+            styles: scene_btn
+            x: 16
+            y: 14
+            width: 120
+            height: 48
+            on_click:
+              - lvgl.page.show:
+                  id: home_page
+                  animation: MOVE_RIGHT
+                  time: 250ms
+            widgets:
+              - label: {align: CENTER, text: "<  Home", text_font: font_body, text_color: 0xFFFFFF}
+        - label:
+            align: TOP_MID
+            y: 20
+            text: "Driveway"
+            text_font: font_ui_medium
+            text_color: 0xFFFFFF
+        - button:
+            styles: scene_btn
+            align: TOP_RIGHT
+            x: -16
+            y: 14
+            width: 170
+            height: 48
+            on_click:
+              - lvgl.page.show:
+                  id: cam_front_page
+                  animation: MOVE_RIGHT
+                  time: 250ms
+            widgets:
+              - label: {align: CENTER, text: "<  Front Door", text_font: font_body, text_color: 0xFFFFFF}
+        - obj:              # Driveway camera: 704x576 stream
+            align: CENTER
+            y: 38
+            width: 704
+            height: 576
             radius: 0
             border_width: 0
             pad_all: 0
@@ -2522,12 +2715,8 @@ lvgl:
                   id: cam_driveway_full_canvas
                   x: 0
                   y: 0
-                  width: 640
-                  height: 480
-        - obj: {x: 20, y: 600, width: 12, height: 12, radius: 6, border_width: 0, bg_color: 0x1FDC8A}
-        - label: {x: 42, y: 592, text: "Front Door", text_font: font_ui_medium, text_color: 0xFFFFFF}
-        - obj: {x: 660, y: 600, width: 12, height: 12, radius: 6, border_width: 0, bg_color: 0x1FDC8A}
-        - label: {x: 682, y: 592, text: "Driveway", text_font: font_ui_medium, text_color: 0xFFFFFF}
+                  width: 704
+                  height: 576
 
     # ==================================================================
     # SETTINGS: one scrollable landscape page. Opened from the sidebar or a
@@ -2625,39 +2814,39 @@ lvgl:
                           - number.set:
                               id: master_volume
                               value: !lambda 'return x;'
-              - obj:
-                  width: ${settings_row_width}
-                  height: ${settings_row_height}
-                  bg_opa: TRANSP
-                  border_width: 0
-                  pad_left: 12
-                  pad_right: 12
-                  scrollable: false
-                  layout:
-                    type: FLEX
-                    flex_flow: ROW
-                    flex_align_main: SPACE_BETWEEN
-                    flex_align_cross: CENTER
-                  widgets:
-                    - label:
-                        width: ${settings_mid_width}
-                        text: "Mic gain"
-                        text_align: LEFT
-                        text_color: 0xFFFFFF
-                        text_font: ${settings_label_font}
-                    - slider:
-                        width: ${settings_control_width}
-                        id: ui_mic_vol_slider
-                        height: ${settings_slider_height}
-                        adv_hittest: true
-                        gesture_bubble: true
-                        min_value: ${mic_gain_min}
-                        max_value: ${mic_gain_max}
-                        value: !lambda 'return id(mic_gain).state;'
-                        on_release:
-                          - number.set:
-                              id: mic_gain
-                              value: !lambda 'return x;'
+#              - obj:
+#                  width: ${settings_row_width}
+#                  height: ${settings_row_height}
+#                  bg_opa: TRANSP
+#                  border_width: 0
+#                  pad_left: 12
+#                  pad_right: 12
+#                  scrollable: false
+#                  layout:
+#                    type: FLEX
+#                    flex_flow: ROW
+#                    flex_align_main: SPACE_BETWEEN
+#                    flex_align_cross: CENTER
+#                  widgets:
+#                    - label:
+#                        width: ${settings_mid_width}
+#                        text: "Mic gain"
+#                        text_align: LEFT
+#                        text_color: 0xFFFFFF
+#                        text_font: ${settings_label_font}
+#                    - slider:
+#                        width: ${settings_control_width}
+#                        id: ui_mic_vol_slider
+#                        height: ${settings_slider_height}
+#                        adv_hittest: true
+#                        gesture_bubble: true
+#                        min_value: ${mic_gain_min}
+#                        max_value: ${mic_gain_max}
+#                        value: !lambda 'return id(mic_gain).state;'
+#                        on_release:
+#                          - number.set:
+#                              id: mic_gain
+#                              value: !lambda 'return x;'
               # ========================================================================
               # SECTION: CALL AND MUTE
               # ========================================================================
@@ -2766,177 +2955,177 @@ lvgl:
                               if (x == id(auto_answer_switch).state) return;
                               if (x) id(auto_answer_switch).turn_on();
                               else id(auto_answer_switch).turn_off();
-              - obj:
-                  width: ${settings_row_width}
-                  height: ${settings_row_height}
-                  bg_opa: TRANSP
-                  border_width: 0
-                  pad_left: 12
-                  pad_right: 12
-                  scrollable: false
-                  layout:
-                    type: FLEX
-                    flex_flow: ROW
-                    flex_align_main: SPACE_BETWEEN
-                    flex_align_cross: CENTER
-                  widgets:
-                    - label:
-                        width: ${settings_mid_width}
-                        text: "Do Not Disturb"
-                        text_align: LEFT
-                        text_color: 0xFFFFFF
-                        text_font: ${settings_label_font}
-                    - switch:
-                        id: ui_dnd_sw
-                        width: ${settings_switch_width}
-                        height: ${settings_switch_height}
-                        state:
-                          checked: !lambda 'return id(dnd_switch).state;'
-                        on_value:
-                          - lambda: |-
-                              if (x == id(dnd_switch).state) return;
-                              if (x) id(dnd_switch).turn_on();
-                              else id(dnd_switch).turn_off();
-              # ========================================================================
-              # SECTION: ECHO CANCELLATION (AEC switch + Mode dropdown)
-              # ========================================================================
-              - obj:
-                  width: ${settings_row_width}
-                  height: 2
-                  bg_color: 0x444444
-                  border_width: 0
-                  pad_all: 0
-              - label:
-                  width: ${settings_row_width}
-                  text: "Echo Cancellation"
-                  text_align: CENTER
-                  text_color: 0x88AAFF
-                  text_font: ${settings_label_font}
-              - obj:
-                  width: ${settings_row_width}
-                  height: ${settings_row_height}
-                  bg_opa: TRANSP
-                  border_width: 0
-                  pad_left: 12
-                  pad_right: 12
-                  scrollable: false
-                  layout:
-                    type: FLEX
-                    flex_flow: ROW
-                    flex_align_main: SPACE_BETWEEN
-                    flex_align_cross: CENTER
-                  widgets:
-                    - label:
-                        width: ${settings_mid_width}
-                        text: "AEC"
-                        text_align: LEFT
-                        text_color: 0xFFFFFF
-                        text_font: ${settings_label_font}
-                    - switch:
-                        id: ui_aec_sw
-                        width: ${settings_switch_width}
-                        height: ${settings_switch_height}
-                        state:
-                          checked: !lambda 'return id(aec_switch).state;'
-                        on_value:
-                          - lambda: |-
-                              if (x == id(aec_switch).state) return;
-                              if (x) id(aec_switch).turn_on();
-                              else id(aec_switch).turn_off();
-              - obj:
-                  width: ${settings_row_width}
-                  height: ${settings_row_height}
-                  bg_opa: TRANSP
-                  border_width: 0
-                  pad_left: 12
-                  pad_right: 12
-                  scrollable: false
-                  layout:
-                    type: FLEX
-                    flex_flow: ROW
-                    flex_align_main: SPACE_BETWEEN
-                    flex_align_cross: CENTER
-                  widgets:
-                    - label:
-                        width: ${settings_mid_width}
-                        text: "AEC mode"
-                        text_align: LEFT
-                        text_color: 0xFFFFFF
-                        text_font: ${settings_label_font}
-                    - dropdown:
-                        id: ui_aec_mode_dd
-                        width: ${settings_dropdown_width}
-                        options:
-                          - "fd_low_cost"
-                          - "fd_high_perf"
-                        selected_text: !lambda 'return id(aec_mode_select).current_option();'
-                        on_value:
-                          - select.set_index:
-                              id: aec_mode_select
-                              index: !lambda 'return x;'
-
-              - obj:
-                  width: ${settings_row_width}
-                  height: ${settings_row_height}
-                  bg_opa: TRANSP
-                  border_width: 0
-                  pad_left: 12
-                  pad_right: 12
-                  scrollable: false
-                  layout:
-                    type: FLEX
-                    flex_flow: ROW
-                    flex_align_main: SPACE_BETWEEN
-                    flex_align_cross: CENTER
-                  widgets:
-                    - label:
-                        width: ${settings_mid_width}
-                        text: "Noise suppression"
-                        text_align: LEFT
-                        text_color: 0xFFFFFF
-                        text_font: ${settings_label_font}
-                    - switch:
-                        id: ui_ns_sw
-                        width: ${settings_switch_width}
-                        height: ${settings_switch_height}
-                        state:
-                          checked: !lambda 'return id(ns_switch).state;'
-                        on_value:
-                          - lambda: |-
-                              if (x == id(ns_switch).state) return;
-                              if (x) id(ns_switch).turn_on();
-                              else id(ns_switch).turn_off();
-              - obj:
-                  width: ${settings_row_width}
-                  height: ${settings_row_height}
-                  bg_opa: TRANSP
-                  border_width: 0
-                  pad_left: 12
-                  pad_right: 12
-                  scrollable: false
-                  layout:
-                    type: FLEX
-                    flex_flow: ROW
-                    flex_align_main: SPACE_BETWEEN
-                    flex_align_cross: CENTER
-                  widgets:
-                    - label:
-                        width: ${settings_mid_width}
-                        text: "Auto gain control"
-                        text_align: LEFT
-                        text_color: 0xFFFFFF
-                        text_font: ${settings_label_font}
-                    - switch:
-                        id: ui_agc_sw
-                        width: ${settings_switch_width}
-                        height: ${settings_switch_height}
-                        state:
-                          checked: !lambda 'return id(agc_switch).state;'
-                        on_value:
-                          - lambda: |-
-                              if (x == id(agc_switch).state) return;
-                              if (x) id(agc_switch).turn_on();
-                              else id(agc_switch).turn_off();
+#              - obj:
+#                  width: ${settings_row_width}
+#                  height: ${settings_row_height}
+#                  bg_opa: TRANSP
+#                  border_width: 0
+#                  pad_left: 12
+#                  pad_right: 12
+#                  scrollable: false
+#                  layout:
+#                    type: FLEX
+#                    flex_flow: ROW
+#                    flex_align_main: SPACE_BETWEEN
+#                    flex_align_cross: CENTER
+#                  widgets:
+#                    - label:
+#                        width: ${settings_mid_width}
+#                        text: "Do Not Disturb"
+#                        text_align: LEFT
+#                        text_color: 0xFFFFFF
+#                        text_font: ${settings_label_font}
+#                    - switch:
+#                        id: ui_dnd_sw
+#                        width: ${settings_switch_width}
+#                        height: ${settings_switch_height}
+#                        state:
+#                          checked: !lambda 'return id(dnd_switch).state;'
+#                        on_value:
+#                          - lambda: |-
+#                              if (x == id(dnd_switch).state) return;
+#                              if (x) id(dnd_switch).turn_on();
+#                              else id(dnd_switch).turn_off();
+#              # ========================================================================
+#              # SECTION: ECHO CANCELLATION (AEC switch + Mode dropdown)
+#              # ========================================================================
+#              - obj:
+#                  width: ${settings_row_width}
+#                  height: 2
+#                  bg_color: 0x444444
+#                  border_width: 0
+#                  pad_all: 0
+#              - label:
+#                  width: ${settings_row_width}
+#                  text: "Echo Cancellation"
+#                  text_align: CENTER
+#                  text_color: 0x88AAFF
+#                  text_font: ${settings_label_font}
+#              - obj:
+#                  width: ${settings_row_width}
+#                  height: ${settings_row_height}
+#                  bg_opa: TRANSP
+#                  border_width: 0
+#                  pad_left: 12
+#                  pad_right: 12
+#                  scrollable: false
+#                  layout:
+#                    type: FLEX
+#                    flex_flow: ROW
+#                    flex_align_main: SPACE_BETWEEN
+#                    flex_align_cross: CENTER
+#                  widgets:
+#                    - label:
+#                        width: ${settings_mid_width}
+#                        text: "AEC"
+#                        text_align: LEFT
+#                        text_color: 0xFFFFFF
+#                        text_font: ${settings_label_font}
+#                    - switch:
+#                        id: ui_aec_sw
+#                        width: ${settings_switch_width}
+#                        height: ${settings_switch_height}
+#                        state:
+#                          checked: !lambda 'return id(aec_switch).state;'
+#                        on_value:
+#                          - lambda: |-
+#                              if (x == id(aec_switch).state) return;
+#                              if (x) id(aec_switch).turn_on();
+#                              else id(aec_switch).turn_off();
+#              - obj:
+#                  width: ${settings_row_width}
+#                  height: ${settings_row_height}
+#                  bg_opa: TRANSP
+#                  border_width: 0
+#                  pad_left: 12
+#                  pad_right: 12
+#                  scrollable: false
+#                  layout:
+#                    type: FLEX
+#                    flex_flow: ROW
+#                    flex_align_main: SPACE_BETWEEN
+#                    flex_align_cross: CENTER
+#                  widgets:
+#                    - label:
+#                        width: ${settings_mid_width}
+#                        text: "AEC mode"
+#                        text_align: LEFT
+#                        text_color: 0xFFFFFF
+#                        text_font: ${settings_label_font}
+#                    - dropdown:
+#                        id: ui_aec_mode_dd
+#                        width: ${settings_dropdown_width}
+#                        options:
+#                          - "fd_low_cost"
+#                          - "fd_high_perf"
+#                        selected_text: !lambda 'return id(aec_mode_select).current_option();'
+#                        on_value:
+#                          - select.set_index:
+#                              id: aec_mode_select
+#                              index: !lambda 'return x;'
+#
+#              - obj:
+#                  width: ${settings_row_width}
+#                  height: ${settings_row_height}
+#                  bg_opa: TRANSP
+#                  border_width: 0
+#                  pad_left: 12
+#                  pad_right: 12
+#                  scrollable: false
+#                  layout:
+#                    type: FLEX
+#                    flex_flow: ROW
+#                    flex_align_main: SPACE_BETWEEN
+#                    flex_align_cross: CENTER
+#                  widgets:
+#                    - label:
+#                        width: ${settings_mid_width}
+#                        text: "Noise suppression"
+#                        text_align: LEFT
+#                        text_color: 0xFFFFFF
+#                        text_font: ${settings_label_font}
+#                    - switch:
+#                        id: ui_ns_sw
+#                        width: ${settings_switch_width}
+#                        height: ${settings_switch_height}
+#                        state:
+#                          checked: !lambda 'return id(ns_switch).state;'
+#                        on_value:
+#                          - lambda: |-
+#                              if (x == id(ns_switch).state) return;
+#                              if (x) id(ns_switch).turn_on();
+#                              else id(ns_switch).turn_off();
+#              - obj:
+#                  width: ${settings_row_width}
+#                  height: ${settings_row_height}
+#                  bg_opa: TRANSP
+#                  border_width: 0
+#                  pad_left: 12
+#                  pad_right: 12
+#                  scrollable: false
+#                  layout:
+#                    type: FLEX
+#                    flex_flow: ROW
+#                    flex_align_main: SPACE_BETWEEN
+#                    flex_align_cross: CENTER
+#                  widgets:
+#                    - label:
+#                        width: ${settings_mid_width}
+#                        text: "Auto gain control"
+#                        text_align: LEFT
+#                        text_color: 0xFFFFFF
+#                        text_font: ${settings_label_font}
+#                    - switch:
+#                        id: ui_agc_sw
+#                        width: ${settings_switch_width}
+#                        height: ${settings_switch_height}
+#                        state:
+#                          checked: !lambda 'return id(agc_switch).state;'
+#                        on_value:
+#                          - lambda: |-
+#                              if (x == id(agc_switch).state) return;
+#                              if (x) id(agc_switch).turn_on();
+#                              else id(agc_switch).turn_off();
 
         # Back to home (top left). Declared after the wrapper so it sits on
         # top of the scrolling settings list.
@@ -3048,7 +3237,75 @@ globals:
     type: float[14]
     restore_value: false
 
+  # True once a snapshot tile has its first picture; until then a new
+  # entity_picture token alone also triggers a download.
+  - id: snap_front_loaded
+    type: bool
+    restore_value: false
+    initial_value: "false"
+  - id: snap_driveway_loaded
+    type: bool
+    restore_value: false
+    initial_value: "false"
+
 script:
+  # Home page clock card: time, day and date (no seconds shown).
+  - id: update_clock
+    then:
+      - if:
+          condition:
+            time.has_time:
+              id: my_time
+          then:
+            - lvgl.label.update:
+                id: clock_time_label
+                text: !lambda 'return id(my_time).now().strftime("%H:%M");'
+            - lvgl.label.update:
+                id: clock_day_label
+                text: !lambda 'return id(my_time).now().strftime("%A");'
+            - lvgl.label.update:
+                id: clock_date_label
+                text: !lambda 'return id(my_time).now().strftime("%d %B");'
+
+  # Download the latest Frigate snapshot through HA's image proxy. The short
+  # delay lets the new entity_picture token arrive with the new state.
+  - id: fetch_front_snapshot
+    mode: restart
+    then:
+      - delay: 1s
+      - if:
+          condition:
+            lambda: |-
+              const auto &p = id(snap_front_picture).state;
+              return p.rfind("/api/", 0) == 0;
+          then:
+            - online_image.set_url:
+                id: snap_front_img
+                url: !lambda 'return std::string("${ha_base_url}") + id(snap_front_picture).state;'
+  - id: fetch_driveway_snapshot
+    mode: restart
+    then:
+      - delay: 1s
+      - if:
+          condition:
+            lambda: |-
+              const auto &p = id(snap_driveway_picture).state;
+              return p.rfind("/api/", 0) == 0;
+          then:
+            - online_image.set_url:
+                id: snap_driveway_img
+                url: !lambda 'return std::string("${ha_base_url}") + id(snap_driveway_picture).state;'
+
+  # VoIP camera: on for the call (video offered / sent), shown as on in HA.
+  # The OV02C10 only captures while a call consumes its frames.
+  - id: camera_call_start
+    then:
+      - voip_stack.set_video_send:
+          enabled: true
+      - switch.template.publish:
+          id: camera_switch
+          state: true
+
   # Top-right status: Wi-Fi strength and the ESP32-C6 co-processor (its
   # firmware version, amber when an update is available). Wi-Fi runs through
   # the C6, so "connected" also means the C6 link is up.
@@ -3180,10 +3437,17 @@ script:
           }
           char text[48];
           if (days > 0)
-            snprintf(text, sizeof(text), "14 days  avg %.1f kWh/day", total / days);
+            snprintf(text, sizeof(text), "Avg %.1f kWh/day", total / days);
           else
-            snprintf(text, sizeof(text), "14 days  no data");
+            snprintf(text, sizeof(text), "no data");
           lv_label_set_text(id(elec_hist_label), text);
+
+          // Y axis: the top of the bars is the busiest day, the middle half of it.
+          char axis[12] = "";
+          if (max_v > 0) snprintf(axis, sizeof(axis), max_v < 10 ? "%.1f" : "%.0f", max_v);
+          lv_label_set_text(id(elec_axis_max), axis);
+          if (max_v > 0) snprintf(axis, sizeof(axis), max_v < 20 ? "%.1f" : "%.0f", max_v / 2);
+          lv_label_set_text(id(elec_axis_mid), axis);
 
   - id: show_voip_keypad
     mode: single
@@ -3313,14 +3577,15 @@ script:
           }
 
   # Back to the home page (from the video page, or when a call needs it). The
-  # settings and cameras pages stay open while the phone is idle.
+  # settings and camera pages stay open while the phone is idle.
   - id: show_phone_page
     mode: restart
     then:
       - lambda: |-
           lv_obj_t *scr = lv_disp_get_scr_act(nullptr);
           const bool keep_page = (scr == id(settings_p4_page)->obj ||
-                                  scr == id(cameras_page)->obj) && id(phone).is_idle();
+                                  scr == id(cam_front_page)->obj ||
+                                  scr == id(cam_driveway_page)->obj) && id(phone).is_idle();
           if (scr != id(home_page)->obj && !keep_page)
             lv_disp_load_scr(id(home_page)->obj);
       - script.execute: update_call_tile
@@ -3439,9 +3704,9 @@ script:
       - lvgl.slider.update:
           id: ui_speaker_vol_slider
           value: !lambda 'return id(master_volume).state;'
-      - lvgl.slider.update:
-          id: ui_mic_vol_slider
-          value: !lambda 'return id(mic_gain).state;'
+#      - lvgl.slider.update:
+#          id: ui_mic_vol_slider
+#          value: !lambda 'return id(mic_gain).state;'
       - lvgl.switch.update:
           id: ui_speaker_mute_sw
           state:
@@ -3454,25 +3719,25 @@ script:
           id: ui_auto_answer_sw
           state:
             checked: !lambda 'return id(auto_answer_switch).state;'
-      - lvgl.switch.update:
-          id: ui_dnd_sw
-          state:
-            checked: !lambda 'return id(dnd_switch).state;'
-      - lvgl.switch.update:
-          id: ui_aec_sw
-          state:
-            checked: !lambda 'return id(aec_switch).state;'
-      - lvgl.dropdown.update:
-          id: ui_aec_mode_dd
-          selected_text: !lambda 'return id(aec_mode_select).current_option();'
-      - lvgl.switch.update:
-          id: ui_ns_sw
-          state:
-            checked: !lambda 'return id(ns_switch).state;'
-      - lvgl.switch.update:
-          id: ui_agc_sw
-          state:
-            checked: !lambda 'return id(agc_switch).state;'
+#      - lvgl.switch.update:
+#          id: ui_dnd_sw
+#          state:
+#            checked: !lambda 'return id(dnd_switch).state;'
+#      - lvgl.switch.update:
+#          id: ui_aec_sw
+#          state:
+#            checked: !lambda 'return id(aec_switch).state;'
+#      - lvgl.dropdown.update:
+#          id: ui_aec_mode_dd
+#          selected_text: !lambda 'return id(aec_mode_select).current_option();'
+#      - lvgl.switch.update:
+#          id: ui_ns_sw
+#          state:
+#            checked: !lambda 'return id(ns_switch).state;'
+#      - lvgl.switch.update:
+#          id: ui_agc_sw
+#          state:
+#            checked: !lambda 'return id(agc_switch).state;'
 
   - id: update_ic_idle_labels
     then:
@@ -3498,6 +3763,31 @@ script:
     then:
       - delay: 2s
       - output.turn_off: speaker_enable
+
+  # Highlights the tapped scene button (0 Home, 1 Night, 2 Movie, 3 Cat Away).
+  - id: scene_select
+    parameters:
+      which: int
+    then:
+      - lvgl.widget.update: {id: scene_home_btn, state: {checked: !lambda 'return which == 0;'}}
+      - lvgl.widget.update: {id: scene_night_btn, state: {checked: !lambda 'return which == 1;'}}
+      - lvgl.widget.update: {id: scene_movie_btn, state: {checked: !lambda 'return which == 2;'}}
+      - lvgl.widget.update: {id: scene_cat_away_btn, state: {checked: !lambda 'return which == 3;'}}
+
+  - id: heater_update_buttons
+    then:
+      - lvgl.widget.update:
+          id: heater_btn_off
+          state:
+            checked: !lambda 'return !id(heater_power_on).state && !id(heater_fan_on).state;'
+      - lvgl.widget.update:
+          id: heater_btn_heat
+          state:
+            checked: !lambda 'return id(heater_power_on).state;'
+      - lvgl.widget.update:
+          id: heater_btn_fan
+          state:
+            checked: !lambda 'return id(heater_fan_on).state;'
 
   # Garage button shows the controller's next action: Stop (red), Down, or Up.
   - id: garage_update_button
@@ -3582,6 +3872,20 @@ binary_sensor:
     on_state:
       - script.execute: garage_update_button
 
+  # Gas heater: highlight Off / Heat / Fan from the Rinnai switches
+  - platform: homeassistant
+    id: heater_power_on
+    entity_id: ${heater_power_switch}
+    internal: true
+    on_state:
+      - script.execute: heater_update_buttons
+  - platform: homeassistant
+    id: heater_fan_on
+    entity_id: ${heater_fan_switch}
+    internal: true
+    on_state:
+      - script.execute: heater_update_buttons
+
 switch:
   # Echo cancellation, noise suppression and auto gain (esp_afe runtime switches).
   - platform: esp_afe
@@ -3601,6 +3905,40 @@ switch:
       name: Auto Gain Control
       icon: mdi:tune-vertical
       restore_mode: RESTORE_DEFAULT_ON
+
+  # VoIP camera (OV02C10). Off by default; turns on by itself when a call
+  # starts and off when it ends. Turning it off during a call stops sending
+  # video; it cannot be turned on outside a call.
+  - platform: template
+    name: Camera
+    id: camera_switch
+    icon: mdi:camera
+    optimistic: false
+    restore_mode: ALWAYS_OFF
+    turn_on_action:
+      - if:
+          condition:
+            voip_stack.is_idle:
+          then:
+            - logger.log:
+                level: INFO
+                format: "Camera only runs during a VoIP call"
+            - switch.template.publish:
+                id: camera_switch
+                state: false
+          else:
+            - script.execute: camera_call_start
+    turn_off_action:
+      - if:
+          condition:
+            not:
+              voip_stack.is_idle:
+          then:
+            - voip_stack.set_video_send:
+                enabled: false
+      - switch.template.publish:
+          id: camera_switch
+          state: false
 
   - platform: template
     name: Mic Mute
@@ -3822,38 +4160,50 @@ text_sensor:
     id: cam_url
     entity_id: input_text.esp_camera_url
     on_value:
-      - lambda: |-
-          id(front_door).set_url(x);
-          id(front_door_full).set_url(x);
+      - lambda: id(front_door_full).set_url(x);
   - platform: homeassistant
     id: cam_url_driveway
     entity_id: input_text.esp_camera_url_driveway
     on_value:
-      - lambda: |-
-          id(driveway_cam).set_url(x);
-          id(driveway_full).set_url(x);
-  # Heater hvac mode -> highlight the matching mode button
+      - lambda: id(driveway_full).set_url(x);
+
+  # Frigate snapshots for the home page tiles. The image entity's state
+  # changes on every new detection; its entity_picture attribute is the
+  # tokenised image-proxy path (the token rotates, so it is read each time).
   - platform: homeassistant
-    id: heater_mode
-    entity_id: ${heater_entity}
+    id: snap_front_picture
+    entity_id: ${snapshot_front_entity}
+    attribute: entity_picture
     internal: true
     on_value:
-      - lvgl.widget.update:
-          id: heater_btn_off
-          state:
-            checked: !lambda 'return x == "off";'
-      - lvgl.widget.update:
-          id: heater_btn_heat
-          state:
-            checked: !lambda 'return x == "heat";'
-      - lvgl.widget.update:
-          id: heater_btn_fan
-          state:
-            checked: !lambda 'return x == "fan_only";'
-      - lvgl.widget.update:
-          id: heater_btn_auto
-          state:
-            checked: !lambda 'return x == "heat_cool" || x == "auto";'
+      - if:
+          condition:
+            lambda: return !id(snap_front_loaded);
+          then:
+            - script.execute: fetch_front_snapshot
+  - platform: homeassistant
+    id: snap_front_state
+    entity_id: ${snapshot_front_entity}
+    internal: true
+    on_value:
+      - script.execute: fetch_front_snapshot
+  - platform: homeassistant
+    id: snap_driveway_picture
+    entity_id: ${snapshot_driveway_entity}
+    attribute: entity_picture
+    internal: true
+    on_value:
+      - if:
+          condition:
+            lambda: return !id(snap_driveway_loaded);
+          then:
+            - script.execute: fetch_driveway_snapshot
+  - platform: homeassistant
+    id: snap_driveway_state
+    entity_id: ${snapshot_driveway_entity}
+    internal: true
+    on_value:
+      - script.execute: fetch_driveway_snapshot
 
   - platform: homeassistant
     id: front_lock_state
@@ -3887,20 +4237,8 @@ interval:
     then:
       - script.execute: update_status_bar
 
-  # Home page clock card
-  - interval: 1s
+  # Home page clock card. The clock shows no seconds, so every 45 s is
+  # enough (the minute flips up to 45 s late).
+  - interval: 45s
     then:
-      - if:
-          condition:
-            time.has_time:
-              id: my_time
-          then:
-            - lvgl.label.update:
-                id: clock_time_label
-                text: !lambda 'return id(my_time).now().strftime("%H:%M");'
-            - lvgl.label.update:
-                id: clock_day_label
-                text: !lambda 'return id(my_time).now().strftime("%A");'
-            - lvgl.label.update:
-                id: clock_date_label
-                text: !lambda 'return id(my_time).now().strftime("%d %B");'
+      - script.execute: update_clock
