@@ -1,6 +1,6 @@
 # =============================================================================
 # Guition JC8012P4A1 (ESP32-P4 10.1"): SIP JPEG videophone + HA dashboard
-# Profile: VoIP only / single-mic AFE / P4 landscape
+# Profile: VoIP only / single-mic AEC / P4 landscape
 #
 # Based on n-IA-hane/esphome-intercom
 #   yamls/voip-only/single-bus/waveshare-p4-touch-videophone-jpeg.yaml
@@ -12,8 +12,8 @@
 #
 # CAPTURE: ES8311 stereo RX; one microphone and the ES8311 internal DAC reference.
 #   [ES8311 RX left: MIC1] + [ES8311 RX right: DAC feedback REF]
-#     -> audio_stack 48 -> 16 kHz -> afe_processor (AEC + NS + AGC, 1 mic)
-#     -> mic_afe -> VoIP TX
+#     -> audio_stack 48 -> 16 kHz -> aec_processor (esp_aec, AEC only)
+#     -> mic_aec -> VoIP TX
 #
 # PLAYBACK:
 #   [HA media] ----------> speaker_player -> media_speaker_input --------+
@@ -51,7 +51,7 @@ substitutions:
   assets_base: "https://github.com/n-IA-hane/esphome-intercom/raw/main/"
   images_base: "https://raw.githubusercontent.com/chickymonkey/guition-10.1-inch-esp32-p4/main/images/"
 
-  # [GUITION] ES8311 ADC PGA sets hardware gain; this is the post-AFE user trim.
+  # [GUITION] ES8311 ADC PGA sets hardware gain; this is the post-AEC user trim.
   mic_gain_min: "-20"
   mic_gain_max: "30"
 
@@ -244,7 +244,7 @@ external_components:
     components: [ov02c10]
     refresh: 1d
   - source: ${audio_stack_components_source}
-    components: [esp_audio_stack, esp_afe]
+    components: [esp_audio_stack, esp_aec]
   ##RTSP stream
   - source: github://chickymonkey/Esp-rtsp-stream
     components: [esp_rtsp_stream]
@@ -272,48 +272,11 @@ esp_rtsp_stream:
 
 # Home page camera tiles: the latest Frigate person snapshot from Home
 # Assistant's image entities, downloaded through HA's image proxy whenever the
-# entity updates (see the snapshot text sensors).
+# entity updates (see the snapshot text sensors and the online_image entries
+# in image: below).
 http_request:
   verify_ssl: false
   timeout: 10s
-
-online_image:
-  - id: snap_front_img
-    url: ${ha_base_url}/
-    format: JPEG
-    type: RGB565
-    resize: 320x240
-    update_interval: never
-    buffer_size: 65536
-    on_download_finished:
-      - lvgl.image.update:
-          id: cam_front_snapshot
-          src: snap_front_img
-      - globals.set:
-          id: snap_front_loaded
-          value: "true"
-    on_error:
-      - logger.log:
-          level: WARN
-          format: "Front door snapshot download failed"
-  - id: snap_driveway_img
-    url: ${ha_base_url}/
-    format: JPEG
-    type: RGB565
-    resize: 320x240
-    update_interval: never
-    buffer_size: 65536
-    on_download_finished:
-      - lvgl.image.update:
-          id: cam_driveway_snapshot
-          src: snap_driveway_img
-      - globals.set:
-          id: snap_driveway_loaded
-          value: "true"
-    on_error:
-      - logger.log:
-          level: WARN
-          format: "Driveway snapshot download failed"
 # =============================================================================
 # CONNECTIVITY
 # =============================================================================
@@ -378,9 +341,17 @@ ota:
       - esp_audio_stack.start:
 
 logger:
-  hardware_uart: USB_SERIAL_JTAG   # [GUITION] USB-C is the P4's native USB
-  level: INFO
+  hardware_uart: USB_SERIAL_JTAG   # [GUITION] USB-C
+  level: INFO                     # DEBUG for troubleshooting; back to INFO when done
   logs:
+    esp_audio_stack: WARN
+    touchscreen: WARN
+    gsl3670: WARN
+    i2c: WARN
+    lvgl: WARN
+    online_image: INFO
+    http_request: INFO
+    homeassistant: INFO
     voip_stack: INFO
     voip_stack.fsm: INFO
     voip_stack.tcp: INFO
@@ -400,7 +371,6 @@ logger:
 preferences:
   flash_write_interval: 5min
 
-# SNTP clock for the home page clock card.
 time:
   - platform: homeassistant
     id: my_time
@@ -415,8 +385,6 @@ time:
         hours: 0
         then:
           - script.execute: fetch_energy_history
-#    servers:
-#      - 0.pool.ntp.org
 
 # BUSES AND CAMERA
 # =============================================================================
@@ -426,7 +394,7 @@ i2c:
     sda: ${codec_i2c_sda_pin}
     scl: ${codec_i2c_scl_pin}
     frequency: 400kHz
-    scan: false
+    scan: true                     # DEBUG: boot log lists 0x18 codec, 0x32 RTC, 0x36 camera, 0x40 touch
 
 # [GUITION] OV02C10 on the 15-pin CSI connector: 1-lane 1920x1080 RAW10 mode,
 # no XCLK/reset/power-down lines.
@@ -442,7 +410,7 @@ esp_video_camera:
   # Not exposed to Home Assistant: HA polling the "P4 Camera" entity kept the
   # sensor capturing all the time. It now only runs for VoIP video; the
   # "Camera" switch shows and controls that.
-  internal: true
+  #internal: true
 
 # =============================================================================
 # OUTPUTS AND LIGHTS
@@ -473,8 +441,14 @@ light:
 # MIC1P/N. With no_dac_ref: false the codec returns its own DAC output on the
 # right ADC channel as a sample-aligned AEC reference.
 esp_audio_stack:
-  task_core: 1
-  audio_task_stack_in_psram: false
+  # Core 0: esp_aec runs inside this task, and on core 1 it starved the
+  # ESPHome loop (LVGL + touch), which is pinned to core 1.
+  task_core: 0
+  # DEBUG: per-frame timing and AEC load every 128 frames (logger DEBUG).
+  telemetry: true
+  telemetry_log_interval_frames: 128
+  audio_task_stack_in_psram: true
+  buffers_in_psram: true
   i2s_lrclk_pin: ${i2s_lrclk_pin}
   i2s_bclk_pin: ${i2s_bclk_pin}
   i2s_mclk_pin: ${i2s_mclk_pin}
@@ -482,7 +456,7 @@ esp_audio_stack:
   i2s_dout_pin: ${i2s_dout_pin} # ES8311 DSDIN (speaker)
   sample_rate: 48000
   output_sample_rate: 16000
-  processor_id: afe_processor
+  processor_id: aec_processor
   audio_effects:
     rate_cvt_complexity: 3
     rate_cvt_perf_type: speed
@@ -502,7 +476,7 @@ esp_audio_stack:
       no_dac_ref: false
   use_stereo_aec_reference: true
   reference_channel: right
-  buffers_in_psram: true
+  aec_reference_buffer_ms: 50 # microphone is about 
   # NS4150 amp follows the real speaker stream (VoIP RX, ringtone, media),
   # as in the upstream boards: on when audio starts, off 2 s after it stops.
   on_amplifier_required:
@@ -515,30 +489,17 @@ esp_audio_stack:
   on_amplifier_idle:
     - script.execute: speaker_amp_idle_off
 
-# Call-only AFE: no wake word or VA, so VAD is off.
-esp_afe:
-  id: afe_processor
-  task_priority: 18
-  feed_task_priority: 18
-  fetch_task_priority: 18
-  type: fd
-  mode: high_perf
-  mic_num: 1                   # [GUITION] one microphone + DAC reference
-  aec_enabled: true
-  aec_filter_length: 4
-  aec_nlp_level: normal
-  se_enabled: false            # SE/BSS needs two microphones.
-  ns_enabled: true
-  vad_enabled: false
-  continuous_vad: false
-  agc_enabled: true            # Single analog mic benefits from AGC.
-  feed_buf_in_psram: false
-  feed_ring_in_psram: false
-  fetch_ring_in_psram: false
+# Standalone echo cancellation. Lighter than the S3 Box setting
+# (fd_high_perf / 8); raise again only if the telemetry shows headroom.
+esp_aec:
+  id: aec_processor
+  sample_rate: 16000
+  filter_length: 4
+  mode: fd_low_cost
 
 microphone:
   - platform: esp_audio_stack
-    id: mic_afe
+    id: mic_aec
 
 speaker:
   - platform: esp_audio_stack
@@ -669,7 +630,7 @@ voip_stack:
         pcm_format: s16le
         channels: 1
         frame_ms: 32
-  microphone: mic_afe          # Post-AEC: no echo in transmitted audio
+  microphone: mic_aec          # Post-AEC: no echo in transmitted audio
   speaker: voip_speaker_input
   ringing_timeout: 30s
   delete_contact_missing_from:
@@ -682,7 +643,6 @@ voip_stack:
         text: "CALLING"
     - script.execute: backlight_timer
     - script.execute: update_call_tile
-    - script.execute: camera_call_start
 
   on_dest_ringing:
     - lambda: id(peer_name) = peer;
@@ -695,7 +655,6 @@ voip_stack:
     - lambda: id(peer_name) = peer;
     - script.execute: backlight_timer
     - script.execute: show_phone_page
-    - script.execute: camera_call_start
     - script.execute: voip_start_ringtone
 
   on_in_call:
@@ -706,10 +665,6 @@ voip_stack:
   on_idle:
     - script.execute: voip_stop_ringtone
     - script.execute: show_phone_page
-    # Call over: camera off. Video stays offered for the next call.
-    - switch.template.publish:
-        id: camera_switch
-        state: false
 
   on_hangup:
     - script.execute: voip_stop_ringtone
@@ -755,6 +710,12 @@ touchscreen:
     i2c_id: internal_i2c
     display: main_display
     on_touch:
+      # DEBUG: confirms the controller reports touches at all.
+      - logger.log:
+          level: DEBUG
+          tag: touch
+          format: "Touch x=%d y=%d"
+          args: ['touch.x', 'touch.y']
       - output.set_level:
           id: backlight_pwm
           level: 100%
@@ -908,6 +869,47 @@ image:
     type: RGB565
     transparency: alpha_channel
     byte_order: little_endian
+  # Home page camera tiles: Frigate snapshots downloaded at runtime. The URL
+  # is set by fetch_front_snapshot / fetch_driveway_snapshot.
+  - platform: online_image
+    id: snap_front_img
+    url: ${ha_base_url}/
+    format: JPEG
+    type: RGB565
+    resize: 320x240
+    update_interval: never
+    buffer_size: 65536
+    on_download_finished:
+      - lvgl.image.update:
+          id: cam_front_snapshot
+          src: snap_front_img
+      - globals.set:
+          id: snap_front_loaded
+          value: "true"
+    on_error:
+      - logger.log:
+          level: WARN
+          format: "Front door snapshot download failed"
+  - platform: online_image
+    id: snap_driveway_img
+    url: ${ha_base_url}/
+    format: JPEG
+    type: RGB565
+    resize: 320x240
+    update_interval: never
+    buffer_size: 65536
+    on_download_finished:
+      - lvgl.image.update:
+          id: cam_driveway_snapshot
+          src: snap_driveway_img
+      - globals.set:
+          id: snap_driveway_loaded
+          value: "true"
+    on_error:
+      - logger.log:
+          level: WARN
+          format: "Driveway snapshot download failed"
+
 
 lvgl:
   displays:
@@ -932,32 +934,32 @@ lvgl:
       radius: 0
       pad_all: 6
     - id: card_style
-      bg_color: 0x0F1B40
-      border_color: 0x1F3270
+      bg_color: 0x151D2B
+      border_color: 0x2A3546
       border_width: 1
       radius: 14
       pad_all: 0
-      text_color: 0xE8EDFF
+      text_color: 0xE8EDF5
       
     - id: icon_24
       text_font: font_mdi_24
-      text_color: 0xE8EDFF
+      text_color: 0xE8EDF5
     - id: title_text
       text_font: font_body
-      text_color: 0xE8EDFF
+      text_color: 0xE8EDF5
     - id: round_btn
       radius: 100
       border_width: 0
       shadow_width: 0
     - id: mode_btn
-      bg_color: 0x12245A
-      border_color: 0x2A3F86
+      bg_color: 0x202B3B
+      border_color: 0x34445A
       border_width: 1
       radius: 9
       shadow_width: 0
     - id: scene_btn
-      bg_color: 0x13245A
-      border_color: 0x2A3F86
+      bg_color: 0x202B3B
+      border_color: 0x34445A
       border_width: 1
       radius: 12
       shadow_width: 0
@@ -970,8 +972,8 @@ lvgl:
       height: 4
       radius: 2
       border_width: 0
-      bg_color: 0x2F6BFF
-      bg_grad_color: 0x8A4DFF
+      bg_color: 0x5B91F5
+      bg_grad_color: 0x9A8BEB
       bg_grad_dir: VER
     # One slat of the garage roller-door curtain
     - id: garage_slat
@@ -980,8 +982,8 @@ lvgl:
       radius: 1
       border_width: 0
       pad_all: 0
-      bg_color: 0x6B7588
-      bg_grad_color: 0x4A5366
+      bg_color: 0x667386
+      bg_grad_color: 0x414D60
       bg_grad_dir: VER
 
   pages:
@@ -999,7 +1001,7 @@ lvgl:
                        FR(1), FR(1), FR(1), FR(1), FR(1), FR(1)]
         pad_row: 0
         pad_column: 0
-      bg_color: 0x08112B
+      bg_color: 0x0B1018
       pad_all: 0
       scrollable: false
       # Swipe up opens settings.
@@ -1033,12 +1035,12 @@ lvgl:
                   id: status_c6_icon
                   text: "\U000F061A"
                   text_font: font_mdi_24
-                  text_color: 0x8A94A6
+                  text_color: 0x8995A7
               - label:
                   id: status_c6_label
                   text: "C6 --"
                   text_font: font_small
-                  text_color: 0xAAB8EE
+                  text_color: 0xA7B2C4
               - obj:          # spacer
                   width: 10
                   height: 1
@@ -1048,12 +1050,12 @@ lvgl:
                   id: status_wifi_icon
                   text: "\U000F05AA"
                   text_font: font_mdi_24
-                  text_color: 0x8A94A6
+                  text_color: 0x8995A7
               - label:
                   id: status_wifi_label
                   text: "--"
                   text_font: font_small
-                  text_color: 0xAAB8EE
+                  text_color: 0xA7B2C4
 
         # =====================================================================
         # SIDEBAR                            col 0 span 1 | row 1 span 16
@@ -1079,8 +1081,8 @@ lvgl:
                   styles: scene_btn
                   width: 100%
                   height: 84
-                  bg_color: 0x4A3DF0
-                  border_color: 0x7B66FF
+                  bg_color: 0x4F7FE8
+                  border_color: 0x82A5FF
                   widgets:
                     - label: {align: TOP_MID, y: 14, text: "\U000F02DC", text_font: font_mdi_24, text_color: 0xFFFFFF}
                     - label: {align: BOTTOM_MID, y: -2, text: "Home", text_font: font_small}
@@ -1095,7 +1097,7 @@ lvgl:
                         animation: MOVE_LEFT
                         time: 250ms
                   widgets:
-                    - label: {align: TOP_MID, y: 14, text: "\U000F07DE", text_font: font_mdi_24, text_color: 0xE8EDFF}
+                    - label: {align: TOP_MID, y: 14, text: "\U000F07DE", text_font: font_mdi_24, text_color: 0xE8EDF5}
                     - label: {align: BOTTOM_MID, y: -2, text: "Cameras", text_font: font_small}
               - button:
                   id: nav_settings_btn
@@ -1108,7 +1110,7 @@ lvgl:
                         animation: MOVE_TOP
                         time: 250ms
                   widgets:
-                    - label: {align: TOP_MID, y: 14, text: "\U000F0493", text_font: font_mdi_24, text_color: 0xE8EDFF}
+                    - label: {align: TOP_MID, y: 14, text: "\U000F0493", text_font: font_mdi_24, text_color: 0xE8EDF5}
                     - label: {align: BOTTOM_MID, y: -2, text: "Settings", text_font: font_small}
 
         # =====================================================================
@@ -1131,8 +1133,8 @@ lvgl:
                   height: 100%
                   scrollable: false
                   clip_corner: true
-                  bg_color: 0x1B1260
-                  bg_grad_color: 0x7A3FA0
+                  bg_color: 0x18243A
+                  bg_grad_color: 0x34466A
                   bg_grad_dir: VER
                   border_width: 0
                   widgets:
@@ -1159,7 +1161,7 @@ lvgl:
                         y: -14
                         text: ""
                         text_font: font_ui_medium
-                        text_color: 0xD6CCFF
+                        text_color: 0xD0D9EA
 
         # =====================================================================
         # 2. GAS HEATER                      col 5 span 4 | row 1 span 5
@@ -1197,8 +1199,8 @@ lvgl:
                         width: 130
                         height: 84
                         radius: 8
-                        bg_color: 0x15171C
-                        border_color: 0x333333
+                        bg_color: 0x171D26
+                        border_color: 0x3B4656
                         border_width: 3
                         pad_all: 0
                         scrollable: false
@@ -1209,8 +1211,8 @@ lvgl:
                               height: 50%
                               radius: 3
                               border_width: 0
-                              bg_color: 0xFF9A2E
-                              bg_grad_color: 0xC8350A
+                              bg_color: 0xE5A45B
+                              bg_grad_color: 0xB95C3D
                               bg_grad_dir: VER
                     - button:
                         id: heater_power_btn
@@ -1220,7 +1222,7 @@ lvgl:
                         y: 52
                         width: 52
                         height: 52
-                        bg_color: 0x6A3DFF
+                        bg_color: 0x527FD6
                         on_click:
                           - homeassistant.action:
                               action: switch.toggle
@@ -1256,8 +1258,8 @@ lvgl:
                               width: 110
                               height: 40
                               checked:
-                                bg_color: 0x5A3DF0
-                                border_color: 0x7B66FF
+                                bg_color: 0x4F7FE8
+                                border_color: 0x82A5FF
                               on_click:
                                 - homeassistant.action:
                                     action: switch.turn_off
@@ -1275,8 +1277,8 @@ lvgl:
                               width: 110
                               height: 40
                               checked:
-                                bg_color: 0x5A3DF0
-                                border_color: 0x7B66FF
+                                bg_color: 0x4F7FE8
+                                border_color: 0x82A5FF
                               on_click:
                                 - homeassistant.action:
                                     action: switch.turn_on
@@ -1290,8 +1292,8 @@ lvgl:
                               width: 110
                               height: 40
                               checked:
-                                bg_color: 0x5A3DF0
-                                border_color: 0x7B66FF
+                                bg_color: 0x4F7FE8
+                                border_color: 0x82A5FF
                               on_click:
                                 - homeassistant.action:
                                     action: switch.turn_on
@@ -1339,9 +1341,9 @@ lvgl:
                         y: -12
                         width: 48
                         height: 48
-                        bg_color: 0x7A2A2A          # unlocked
+                        bg_color: 0x713F46          # unlocked
                         checked:
-                          bg_color: 0x0F5B44        # locked
+                          bg_color: 0x276B57        # locked
                         on_click:
                           - if:
                               condition:
@@ -1404,9 +1406,9 @@ lvgl:
                         y: -12
                         width: 48
                         height: 48
-                        bg_color: 0x7A2A2A          # unlocked
+                        bg_color: 0x713F46          # unlocked
                         checked:
-                          bg_color: 0x0F5B44        # locked
+                          bg_color: 0x276B57        # locked
                         on_click:
                           - if:
                               condition:
@@ -1469,8 +1471,8 @@ lvgl:
                         width: 150
                         height: 110
                         radius: 8
-                        bg_color: 0x2C3340
-                        border_color: 0x3A4352
+                        bg_color: 0x222B38
+                        border_color: 0x3A4658
                         border_width: 2
                         pad_all: 0
                         scrollable: false
@@ -1525,7 +1527,7 @@ lvgl:
                         y: -4
                         text: "--"
                         text_font: font_small
-                        text_color: 0xAAB8EE
+                        text_color: 0xA7B2C4
                     # One button for the controller's next action (Up / Stop /
                     # Down); garage_update_button sets its icon and colour.
                     - button:
@@ -1536,7 +1538,7 @@ lvgl:
                         y: -5
                         width: 56
                         height: 56
-                        bg_color: 0x3A4DE0
+                        bg_color: 0x527FD6
                         on_click:
                           - homeassistant.action:
                               action: button.press
@@ -1612,7 +1614,7 @@ lvgl:
                               x: -14
                               y: 12
                               text: "Keypad"
-                              text_color: 0x7C83FF
+                              text_color: 0x8DAEFF
                               text_font: font_small
                               clickable: true
                               gesture_bubble: false
@@ -1625,7 +1627,7 @@ lvgl:
                               y: 32
                               width: 54
                               height: 2
-                              bg_color: 0x7C83FF
+                              bg_color: 0x8DAEFF
                               border_width: 0
                               radius: 1
                           - label:
@@ -1643,7 +1645,7 @@ lvgl:
                               align: TOP_MID
                               y: 108
                               text: "Contacts: 0"
-                              text_color: 0x8A94A6
+                              text_color: 0x8995A7
                               text_font: font_small
                           - label:
                               id: call_idle_hint_label
@@ -1651,7 +1653,7 @@ lvgl:
                               y: 134
                               width: 210
                               text: "Swipe to browse"
-                              text_color: 0x667085
+                              text_color: 0x778397
                               text_font: font_small
                               text_align: CENTER
                               long_mode: DOT
@@ -1679,7 +1681,7 @@ lvgl:
                               y: -16
                               width: 58
                               height: 50
-                              bg_color: 0x13245A
+                              bg_color: 0x202B3B
                               radius: 9
                               on_click:
                                 - voip_stack.prev_contact:
@@ -1687,7 +1689,7 @@ lvgl:
                                 - label:
                                     align: CENTER
                                     text: "\U000F0141"
-                                    text_color: 0xE5E7EB
+                                    text_color: 0xDCE3ED
                                     text_font: font_action_icon
                           - button:
                               id: call_button_widget
@@ -1695,7 +1697,7 @@ lvgl:
                               y: -12
                               width: 78
                               height: 58
-                              bg_color: 0x22C55E
+                              bg_color: 0x43A982
                               radius: 9
                               on_click:
                                 - voip_stack.call_toggle:
@@ -1712,7 +1714,7 @@ lvgl:
                               y: -16
                               width: 58
                               height: 50
-                              bg_color: 0x13245A
+                              bg_color: 0x202B3B
                               radius: 9
                               on_click:
                                 - voip_stack.next_contact:
@@ -1720,7 +1722,7 @@ lvgl:
                                 - label:
                                     align: CENTER
                                     text: "\U000F0142"
-                                    text_color: 0xE5E7EB
+                                    text_color: 0xDCE3ED
                                     text_font: font_action_icon
 
                     # ---- idle: dial keypad (slides in over the contact browser) ----
@@ -1729,7 +1731,7 @@ lvgl:
                         align: TOP_RIGHT
                         width: 60%
                         height: 100%
-                        bg_color: 0x0F1B40
+                        bg_color: 0x151D2B
                         border_width: 0
                         radius: 0
                         pad_all: 0
@@ -1754,7 +1756,7 @@ lvgl:
                               x: -14
                               y: 12
                               text: "Contacts"
-                              text_color: 0x7C83FF
+                              text_color: 0x8DAEFF
                               text_font: font_small
                               clickable: true
                               gesture_bubble: false
@@ -1767,7 +1769,7 @@ lvgl:
                               y: 32
                               width: 66
                               height: 2
-                              bg_color: 0x7C83FF
+                              bg_color: 0x8DAEFF
                               border_width: 0
                               radius: 1
                           - buttonmatrix:
@@ -1783,7 +1785,7 @@ lvgl:
                               pad_column: 6
                               gesture_bubble: true
                               items:
-                                bg_color: 0x13245A
+                                bg_color: 0x202B3B
                                 text_color: 0xFFFFFF
                                 text_font: font_body
                                 radius: 8
@@ -1816,7 +1818,7 @@ lvgl:
                               y: -8
                               width: 62
                               height: 42
-                              bg_color: 0x13245A
+                              bg_color: 0x202B3B
                               radius: 8
                               on_click:
                                 - lambda: |-
@@ -1826,14 +1828,14 @@ lvgl:
                                 - label:
                                     align: CENTER
                                     text: "CLEAR"
-                                    text_color: 0xE5E7EB
+                                    text_color: 0xDCE3ED
                                     text_font: font_small
                           - button:
                               align: BOTTOM_MID
                               y: -8
                               width: 78
                               height: 42
-                              bg_color: 0x22C55E
+                              bg_color: 0x43A982
                               radius: 8
                               on_click:
                                 - if:
@@ -1857,7 +1859,7 @@ lvgl:
                               y: -8
                               width: 62
                               height: 42
-                              bg_color: 0x13245A
+                              bg_color: 0x202B3B
                               radius: 8
                               on_click:
                                 - lambda: |-
@@ -1868,7 +1870,7 @@ lvgl:
                                 - label:
                                     align: CENTER
                                     text: "DEL"
-                                    text_color: 0xE5E7EB
+                                    text_color: 0xDCE3ED
                                     text_font: font_small
 
                     # ---- incoming call ----
@@ -1877,7 +1879,7 @@ lvgl:
                         align: TOP_RIGHT
                         width: 60%
                         height: 100%
-                        bg_color: 0x2A0710
+                        bg_color: 0x2B1A22
                         border_width: 0
                         radius: 0
                         pad_all: 0
@@ -1888,7 +1890,7 @@ lvgl:
                               align: TOP_MID
                               y: 14
                               text: "Incoming call"
-                              text_color: 0xFF5B6E
+                              text_color: 0xE47B86
                               text_font: font_ui_medium
                           - label:
                               id: call_ringing_in_peer_label
@@ -1906,7 +1908,7 @@ lvgl:
                               y: -14
                               width: 104
                               height: 56
-                              bg_color: 0x22C55E
+                              bg_color: 0x43A982
                               radius: 9
                               on_click:
                                 - voip_stack.answer_call:
@@ -1922,7 +1924,7 @@ lvgl:
                               y: -14
                               width: 104
                               height: 56
-                              bg_color: 0xEF4444
+                              bg_color: 0xD65B64
                               radius: 9
                               on_click:
                                 - voip_stack.decline_call:
@@ -1939,7 +1941,7 @@ lvgl:
                         align: TOP_RIGHT
                         width: 60%
                         height: 100%
-                        bg_color: 0x21160A
+                        bg_color: 0x2A241C
                         border_width: 0
                         radius: 0
                         pad_all: 0
@@ -1951,7 +1953,7 @@ lvgl:
                               align: TOP_MID
                               y: 14
                               text: "CALLING"
-                              text_color: 0xF59E0B
+                              text_color: 0xD6A35D
                               text_font: font_ui_medium
                           - label:
                               id: call_ringing_out_peer_label
@@ -1967,14 +1969,14 @@ lvgl:
                               align: CENTER
                               y: 14
                               text: "Waiting for answer"
-                              text_color: 0xC6D0DF
+                              text_color: 0xC5CEDA
                               text_font: font_small
                           - button:
                               align: BOTTOM_MID
                               y: -14
                               width: 150
                               height: 56
-                              bg_color: 0xEF4444
+                              bg_color: 0xD65B64
                               radius: 9
                               on_click:
                                 - voip_stack.call_toggle:
@@ -1991,7 +1993,7 @@ lvgl:
                         align: TOP_RIGHT
                         width: 60%
                         height: 100%
-                        bg_color: 0x062414
+                        bg_color: 0x172A25
                         border_width: 0
                         radius: 0
                         pad_all: 0
@@ -2002,7 +2004,7 @@ lvgl:
                               align: TOP_MID
                               y: 14
                               text: "In call"
-                              text_color: 0x22C55E
+                              text_color: 0x43A982
                               text_font: font_ui_medium
                           - label:
                               id: p4_call_media_route_label
@@ -2010,7 +2012,7 @@ lvgl:
                               y: 46
                               width: 90%
                               text: ""
-                              text_color: 0x94A3B8
+                              text_color: 0x9BA8B9
                               text_font: font_small
                               text_align: CENTER
                               long_mode: DOT
@@ -2029,7 +2031,7 @@ lvgl:
                               y: -14
                               width: 150
                               height: 56
-                              bg_color: 0xEF4444
+                              bg_color: 0xD65B64
                               radius: 9
                               on_click:
                                 - voip_stack.call_toggle:
@@ -2046,7 +2048,7 @@ lvgl:
                         align: TOP_RIGHT
                         width: 60%
                         height: 100%
-                        bg_color: 0x191D25
+                        bg_color: 0x202833
                         border_width: 0
                         radius: 0
                         pad_all: 0
@@ -2069,7 +2071,7 @@ lvgl:
                               y: 30
                               width: 210
                               text: ""
-                              text_color: 0xFFD166
+                              text_color: 0xE2C17B
                               text_font: font_small
                               text_align: CENTER
                               long_mode: WRAP
@@ -2116,7 +2118,7 @@ lvgl:
                         text: ""
                         text_align: RIGHT
                         text_font: font_small
-                        text_color: 0xAAB8EE
+                        text_color: 0xA7B2C4
                     - label:
                         id: elec_axis_mid
                         x: 0
@@ -2125,7 +2127,7 @@ lvgl:
                         text: ""
                         text_align: RIGHT
                         text_font: font_small
-                        text_color: 0xAAB8EE
+                        text_color: 0xA7B2C4
                     - label:
                         x: 0
                         y: 180
@@ -2133,7 +2135,7 @@ lvgl:
                         text: "0"
                         text_align: RIGHT
                         text_font: font_small
-                        text_color: 0xAAB8EE
+                        text_color: 0xA7B2C4
                     - obj:          # Y axis line
                         x: 35
                         y: 48
@@ -2141,13 +2143,13 @@ lvgl:
                         height: 140
                         radius: 0
                         border_width: 0
-                        bg_color: 0x2A3F86
+                        bg_color: 0x34445A
                     - label:        # axis unit, under the axis
                         x: 11
                         y: 200
                         text: "kWh"
                         text_font: font_small
-                        text_color: 0x667085
+                        text_color: 0x778397
                     - obj:
                         id: elec_bars
                         x: 43
@@ -2157,7 +2159,6 @@ lvgl:
                         bg_opa: TRANSP
                         border_width: 0
                         pad_all: 0
-                        pad_column: 0       # no theme gap: SPACE_BETWEEN alone spaces the bars
                         scrollable: false
                         layout:
                           type: flex
@@ -2165,6 +2166,7 @@ lvgl:
                           flex_align_main: SPACE_BETWEEN
                           flex_align_cross: END
                           flex_align_track: END
+                          pad_column: 0     # no theme gap: SPACE_BETWEEN alone spaces the bars
                         widgets:
                           - obj: {id: ebar_0, styles: ebar}
                           - obj: {id: ebar_1, styles: ebar}
@@ -2190,7 +2192,7 @@ lvgl:
                         text: ""
                         text_align: CENTER
                         text_font: font_small
-                        text_color: 0xAAB8EE
+                        text_color: 0xA7B2C4
                     - obj:          # ring + live value
                         align: RIGHT_MID
                         x: -22
@@ -2211,10 +2213,10 @@ lvgl:
                               max_value: ${power_max_w}
                               value: 2400
                               adjustable: false
-                              arc_color: 0x1A2A66
+                              arc_color: 0x29364A
                               arc_width: 7
                               indicator:
-                                arc_color: 0x3A4DE0
+                                arc_color: 0x527FD6
                                 arc_width: 7
                           - label:
                               id: elec_value_label
@@ -2228,7 +2230,7 @@ lvgl:
                               y: 16
                               text: "kW"
                               text_font: font_small
-                              text_color: 0xAAB8EE
+                              text_color: 0xA7B2C4
 
         # =====================================================================
         # 7. TEMPERATURE                     col 9 span 4 | row 6 span 6
@@ -2266,8 +2268,8 @@ lvgl:
                         y: 46
                         width: 173
                         height: 80
-                        bg_color: 0x0F3A73
-                        border_color: 0x2B4AA0
+                        bg_color: 0x20364A
+                        border_color: 0x354F6B
                         scrollable: false
                         widgets:
                           - label: {styles: icon_24, x: 10, y: 8, text: "\U000F04B9"}
@@ -2286,8 +2288,8 @@ lvgl:
                         y: 46
                         width: 173
                         height: 80
-                        bg_color: 0x2A2A73
-                        border_color: 0x4A4AB0
+                        bg_color: 0x2B3046
+                        border_color: 0x444C68
                         scrollable: false
                         widgets:
                           - label: {styles: icon_24, x: 10, y: 8, text: "\U000F02E3"}
@@ -2306,8 +2308,8 @@ lvgl:
                         y: 138
                         width: 173
                         height: 80
-                        bg_color: 0xB45309          # amber
-                        border_color: 0xF59E0B      # lighter amber edge
+                        bg_color: 0x59432D          # amber
+                        border_color: 0xD6A35D      # lighter amber edge
                         scrollable: false
                         widgets:
                           - label: {styles: icon_24, x: 10, y: 8, text: "\U000F0599"}
@@ -2326,8 +2328,8 @@ lvgl:
                         y: 138
                         width: 173
                         height: 80
-                        bg_color: 0x0F4066
-                        border_color: 0x2A7AA8
+                        bg_color: 0x203846
+                        border_color: 0x3D687C
                         scrollable: false
                         widgets:
                           - label: {styles: icon_24, x: 10, y: 8, text: "\U000F058C"}
@@ -2405,12 +2407,12 @@ lvgl:
                               radius: 0
                               border_width: 0
                               pad_all: 0
-                              bg_color: 0x0A1330
+                              bg_color: 0x111A28
                               bg_opa: 85%
                               clickable: false            # let taps reach the tile
                               scrollable: false
                               widgets:
-                                - obj: {align: BOTTOM_MID, y: -8, width: 9, height: 9, radius: 5, border_width: 0, bg_color: 0x1FDC8A, clickable: false}
+                                - obj: {align: BOTTOM_MID, y: -8, width: 9, height: 9, radius: 5, border_width: 0, bg_color: 0x63C9A0, clickable: false}
                                 - label:
                                     align: CENTER
                                     width: 100
@@ -2454,12 +2456,12 @@ lvgl:
                               radius: 0
                               border_width: 0
                               pad_all: 0
-                              bg_color: 0x0A1330
+                              bg_color: 0x111A28
                               bg_opa: 85%
                               clickable: false            # let taps reach the tile
                               scrollable: false
                               widgets:
-                                - obj: {align: BOTTOM_MID, y: -8, width: 9, height: 9, radius: 5, border_width: 0, bg_color: 0x1FDC8A, clickable: false}
+                                - obj: {align: BOTTOM_MID, y: -8, width: 9, height: 9, radius: 5, border_width: 0, bg_color: 0x63C9A0, clickable: false}
                                 - label:
                                     align: CENTER
                                     width: 100
@@ -2513,8 +2515,8 @@ lvgl:
                         state:
                           checked: true
                         checked:
-                          bg_color: 0x4A3DF0
-                          border_color: 0x7B66FF
+                          bg_color: 0x4F7FE8
+                          border_color: 0x82A5FF
                         on_click:
                           - homeassistant.action:
                               action: scene.turn_on
@@ -2523,7 +2525,7 @@ lvgl:
                           - script.execute: {id: scene_select, which: 0}
                         widgets:
                           - label: {align: TOP_MID, y: 30, text: "\U000F02DC", text_font: font_mdi_36, text_color: 0xFFFFFF}
-                          - label: {align: BOTTOM_MID, y: -26, text: "Home", text_font: font_body}
+                          - label: {align: BOTTOM_MID, y: -26, text: "Home", text_font: font_small}
                     - button:
                         id: scene_night_btn
                         styles: scene_btn
@@ -2532,8 +2534,8 @@ lvgl:
                         width: 105
                         height: 146
                         checked:
-                          bg_color: 0x4A3DF0
-                          border_color: 0x7B66FF
+                          bg_color: 0x4F7FE8
+                          border_color: 0x82A5FF
                         on_click:
                           - homeassistant.action:
                               action: scene.turn_on
@@ -2541,8 +2543,8 @@ lvgl:
                                 entity_id: ${scene_night_entity}
                           - script.execute: {id: scene_select, which: 1}
                         widgets:
-                          - label: {align: TOP_MID, y: 30, text: "\U000F0594", text_font: font_mdi_36, text_color: 0xB8A8FF}
-                          - label: {align: BOTTOM_MID, y: -26, text: "Night", text_font: font_body}
+                          - label: {align: TOP_MID, y: 30, text: "\U000F0594", text_font: font_mdi_36, text_color: 0xB8C8F0}
+                          - label: {align: BOTTOM_MID, y: -26, text: "Night", text_font: font_small}
                     - button:
                         id: scene_movie_btn
                         styles: scene_btn
@@ -2551,8 +2553,8 @@ lvgl:
                         width: 105
                         height: 146
                         checked:
-                          bg_color: 0x4A3DF0
-                          border_color: 0x7B66FF
+                          bg_color: 0x4F7FE8
+                          border_color: 0x82A5FF
                         on_click:
                           - homeassistant.action:
                               action: scene.turn_on
@@ -2560,8 +2562,8 @@ lvgl:
                                 entity_id: ${scene_movie_entity}
                           - script.execute: {id: scene_select, which: 2}
                         widgets:
-                          - label: {align: TOP_MID, y: 30, text: "\U000F0FCE", text_font: font_mdi_36, text_color: 0xB8A8FF}
-                          - label: {align: BOTTOM_MID, y: -26, text: "Movie", text_font: font_body}
+                          - label: {align: TOP_MID, y: 30, text: "\U000F0FCE", text_font: font_mdi_36, text_color: 0xB8C8F0}
+                          - label: {align: BOTTOM_MID, y: -26, text: "Movie", text_font: font_small}
                     - button:
                         id: scene_cat_away_btn
                         styles: scene_btn
@@ -2570,8 +2572,8 @@ lvgl:
                         width: 105
                         height: 146
                         checked:
-                          bg_color: 0x4A3DF0
-                          border_color: 0x7B66FF
+                          bg_color: 0x4F7FE8
+                          border_color: 0x82A5FF
                         on_click:
                           - homeassistant.action:
                               action: scene.turn_on
@@ -2579,8 +2581,8 @@ lvgl:
                                 entity_id: ${scene_cat_away_entity}
                           - script.execute: {id: scene_select, which: 3}
                         widgets:
-                          - label: {align: TOP_MID, y: 30, text: "\U000F011B", text_font: font_mdi_36, text_color: 0xB8A8FF}
-                          - label: {align: BOTTOM_MID, y: -26, text: "Cat Away", text_font: font_body}
+                          - label: {align: TOP_MID, y: 30, text: "\U000F011B", text_font: font_mdi_36, text_color: 0xB8C8F0}
+                          - label: {align: BOTTOM_MID, y: -26, text: "Cat Away", text_font: font_small}
 
         # ---- row 17: bottom half grid intentionally empty -------------------
 
@@ -2592,7 +2594,7 @@ lvgl:
     # returns. Each stream only runs while its page is shown.
     # ==================================================================
     - id: cam_front_page
-      bg_color: 0x08112B
+      bg_color: 0x0B1018
       scrollable: false
       on_swipe_left:
         - lvgl.page.show:
@@ -2642,8 +2644,8 @@ lvgl:
         - obj:              # Front door camera: 640x480 stream
             align: CENTER
             y: 38
-            width: 640
-            height: 480
+            width: 704
+            height: 576
             radius: 0
             border_width: 0
             pad_all: 0
@@ -2654,11 +2656,11 @@ lvgl:
                   id: cam_front_full_canvas
                   x: 0
                   y: 0
-                  width: 640
-                  height: 480
+                  width: 704
+                  height: 576
 
     - id: cam_driveway_page
-      bg_color: 0x08112B
+      bg_color: 0x0B1018
       scrollable: false
       on_swipe_right:
         - lvgl.page.show:
@@ -2717,7 +2719,6 @@ lvgl:
                   y: 0
                   width: 704
                   height: 576
-
     # ==================================================================
     # SETTINGS: one scrollable landscape page. Opened from the sidebar or a
     # swipe up on the home page; swipe down returns to the home page.
@@ -3295,16 +3296,6 @@ script:
             - online_image.set_url:
                 id: snap_driveway_img
                 url: !lambda 'return std::string("${ha_base_url}") + id(snap_driveway_picture).state;'
-
-  # VoIP camera: on for the call (video offered / sent), shown as on in HA.
-  # The OV02C10 only captures while a call consumes its frames.
-  - id: camera_call_start
-    then:
-      - voip_stack.set_video_send:
-          enabled: true
-      - switch.template.publish:
-          id: camera_switch
-          state: true
 
   # Top-right status: Wi-Fi strength and the ESP32-C6 co-processor (its
   # firmware version, amber when an update is available). Wi-Fi runs through
@@ -3887,58 +3878,30 @@ binary_sensor:
       - script.execute: heater_update_buttons
 
 switch:
-  # Echo cancellation, noise suppression and auto gain (esp_afe runtime switches).
-  - platform: esp_afe
-    esp_afe_id: afe_processor
+  # Echo cancellation on/off (esp_aec through esp_audio_stack).
+  - platform: esp_audio_stack
     aec:
       id: aec_switch
       name: Echo Cancellation
       icon: mdi:ear-hearing
-      restore_mode: ALWAYS_ON
-    ns:
-      id: ns_switch
-      name: Noise Suppression
-      icon: mdi:volume-off
-      restore_mode: RESTORE_DEFAULT_ON
-    agc:
-      id: agc_switch
-      name: Auto Gain Control
-      icon: mdi:tune-vertical
       restore_mode: RESTORE_DEFAULT_ON
 
-  # VoIP camera (OV02C10). Off by default; turns on by itself when a call
-  # starts and off when it ends. Turning it off during a call stops sending
-  # video; it cannot be turned on outside a call.
+  # VoIP camera (OV02C10): send video on calls. Can be set at any time; while
+  # idle it is the choice for the next call, during a call it adds or drops
+  # the outgoing video. The sensor itself only captures while a call with
+  # negotiated video consumes its frames.
   - platform: template
     name: Camera
     id: camera_switch
     icon: mdi:camera
-    optimistic: false
-    restore_mode: ALWAYS_OFF
-    turn_on_action:
-      - if:
-          condition:
-            voip_stack.is_idle:
-          then:
-            - logger.log:
-                level: INFO
-                format: "Camera only runs during a VoIP call"
-            - switch.template.publish:
-                id: camera_switch
-                state: false
-          else:
-            - script.execute: camera_call_start
-    turn_off_action:
-      - if:
-          condition:
-            not:
-              voip_stack.is_idle:
-          then:
-            - voip_stack.set_video_send:
-                enabled: false
-      - switch.template.publish:
-          id: camera_switch
-          state: false
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+    on_turn_on:
+      - voip_stack.set_video_send:
+          enabled: true
+    on_turn_off:
+      - voip_stack.set_video_send:
+          enabled: false
 
   - platform: template
     name: Mic Mute
@@ -3952,13 +3915,13 @@ switch:
           level: INFO
           tag: mute
           format: "Mic mute ON"
-      - microphone.mute: mic_afe
+      - microphone.mute: mic_aec
     on_turn_off:
       - logger.log:
           level: INFO
           tag: mute
           format: "Mic mute OFF"
-      - microphone.unmute: mic_afe
+      - microphone.unmute: mic_aec
 
   # Speaker Mute: DAC mute plus amplifier enable/disable
   - platform: template
@@ -3997,61 +3960,6 @@ button:
     entity_category: diagnostic
     on_press:
       - script.execute: fetch_energy_history
-
-select:
-  - platform: template
-    name: AEC Mode
-    id: aec_mode_select
-    icon: mdi:tune-vertical
-    options:
-      - "fd_low_cost"
-      - "fd_high_perf"
-    initial_option: "fd_high_perf"
-    # Non-optimistic: the final lambda publishes the live esp_afe mode.
-    optimistic: false
-    restore_value: false
-    set_action:
-      - if:
-          condition:
-            lambda: return x != id(afe_processor).get_mode_name();
-          then:
-            - if:
-                condition:
-                  not:
-                    voip_stack.is_idle:
-                then:
-                  - logger.log:
-                      level: WARN
-                      format: "Cannot switch AEC mode during a call"
-                else:
-                  - logger.log:
-                      format: "Switching AEC mode to %s"
-                      args: ['x.c_str()']
-                  - esp_audio_stack.stop:
-                  - wait_until:
-                      condition:
-                        esp_audio_stack.is_idle:
-                      timeout: 2s
-                  - esp_afe.set_mode:
-                      id: afe_processor
-                      mode: !lambda 'return x;'
-                  - wait_until:
-                      condition:
-                        lambda: 'return id(afe_processor).is_reconfigure_idle();'
-                      timeout: 20s
-                  - if:
-                      condition:
-                        lambda: 'return id(afe_processor).is_reconfigure_idle() && id(afe_processor).get_last_reconfigure_ok();'
-                      then:
-                        - esp_audio_stack.start:
-                      else:
-                        - logger.log:
-                            level: ERROR
-                            tag: main
-                            format: "AFE mode switch did not complete cleanly; audio restart skipped"
-      # Reflect actual live mode (covers rejection and silent hardware mode).
-      - lambda: |-
-          id(aec_mode_select).publish_state(id(afe_processor).get_mode_name());
 
 sensor:
   # Wi-Fi signal (dBm) and the same as a percentage; the status bar shows %.
