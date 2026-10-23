@@ -1,0 +1,11 @@
+Firmware provenance
+===================
+
+private_include/gsl3680_firmware.h contains the original JC8012P4A1C controller
+firmware table supplied with the local port. Its contents are unchanged.
+No upstream license was supplied for this table; the component's MIT license
+does not grant rights to it. Its owner's authorization is needed to relicense it.
+
+The driver initialization sequence and panel calibration parameters retain
+the behavior of the supplied port. The driver code, public API, examples,
+tests and documentation are provided under LICENSE (MIT).

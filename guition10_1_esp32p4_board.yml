@@ -139,6 +139,9 @@ substitutions:
   temp_bedroom_entity: sensor.temp_bathroom_main_main_bathroom_temperature
   temp_outdoor_entity: sensor.bathroom_temp_and_humidity_temperature
   humidity_entity: sensor.temp_bathroom_main_main_bathroom_humidity
+  # Status bar: current soil moisture plus the 9-10 am average of the last two
+  # days (HA long-term statistics, so the sensor needs a state_class).
+  soil_moisture_entity: sensor.current_soil_moisture
   scene_home_entity: scene.back_home
   scene_night_entity: scene.sleep
   scene_movie_entity: scene.movie_night
@@ -235,8 +238,9 @@ external_components:
     components: [speaker]
   # [GUITION] The intercom fork's mipi_dsi (needed by p4_video_renderer), patched
   # for ESP32-P4 v3.x silicon. See components/mipi_dsi/UPSTREAM.md.
+  # gsl3680: JC8012P4A1C touch driver (see components/gsl3680).
   - source: github://chickymonkey/guition-10.1-inch-esp32-p4@main
-    components: [mipi_dsi]
+    components: [mipi_dsi, gsl3680]
     refresh: 1d
   # [GUITION] OV02C10 sensor driver (auto-detected by esp_video_camera, which
   # comes from the p4_video_jpeg package).
@@ -319,6 +323,7 @@ api:
     - script.execute: update_status_bar
     - delay: 5s
     - script.execute: fetch_energy_history
+    - script.execute: fetch_soil_history
 
 # OTA pauses audio, VoIP and LVGL so the flash write has the bus to itself.
 ota:
@@ -385,6 +390,12 @@ time:
         hours: 0
         then:
           - script.execute: fetch_energy_history
+      # New day: shift the soil history (yesterday's 9-10 am hour is final).
+      - seconds: 0
+        minutes: 10
+        hours: 0
+        then:
+          - script.execute: fetch_soil_history
 
 # BUSES AND CAMERA
 # =============================================================================
@@ -702,11 +713,14 @@ display:
     update_interval: never
     auto_clear_enabled: false
 
-# [GUITION] GSL3680 touch controller (ESPHome gsl3670 driver board preset).
+# [GUITION] GSL3680 touch controller, JC8012P4A1C ("New Panel 2026"). Our
+# gsl3680 component (port of guition-jc/esp_lcd_touch_gsl3680) loads Guition's
+# own controller firmware, maps sensor to panel coordinates, tracks/smooths
+# contacts and ignores failed reads on the shared I2C bus instead of treating
+# them as a release. Polled; reset is GPIO22 by default.
 touchscreen:
-  - platform: gsl3670
+  - platform: gsl3680
     id: main_touch
-    model: GUITION-JC8012P4A1
     i2c_id: internal_i2c
     display: main_display
     on_touch:
@@ -1011,6 +1025,53 @@ lvgl:
             animation: MOVE_TOP
             time: 250ms
       widgets:
+        # =====================================================================
+        # SOIL MOISTURE (top, left of the status)  col 5 span 3 | row 0
+        # Now | two days ago | yesterday (9-10 am average), between grey bars.
+        # =====================================================================
+        - obj:
+            styles: cell_style
+            scrollable: false
+            grid_cell_column_pos: 5
+            grid_cell_row_pos: 0
+            grid_cell_column_span: 3
+            grid_cell_row_span: 1
+            grid_cell_x_align: STRETCH
+            grid_cell_y_align: STRETCH
+            layout:
+              type: flex
+              flex_flow: ROW
+              flex_align_main: SPACE_EVENLY
+              flex_align_cross: CENTER
+            widgets:
+              - label:
+                  text: "|"
+                  text_font: font_small
+                  text_color: 0xAAAAAA
+              - label:
+                  text: "\U000F058C"
+                  text_font: font_mdi_24
+                  text_color: 0x47B7E9
+              - label:
+                  id: soil_now_label
+                  text: "Now --%"
+                  text_font: font_small
+                  text_color: 0xAAB8EE
+              - label:
+                  id: soil_day1_label
+                  text: "-- --%"
+                  text_font: font_small
+                  text_color: 0xAAB8EE
+              - label:
+                  id: soil_day2_label
+                  text: "-- --%"
+                  text_font: font_small
+                  text_color: 0xAAB8EE
+              - label:
+                  text: "|"
+                  text_font: font_small
+                  text_color: 0xAAAAAA
+
         # =====================================================================
         # STATUS (top right): ESP32-C6 firmware + Wi-Fi  col 8 span 5 | row 0
         # update_status_bar refreshes it every 10 s.
@@ -3238,6 +3299,12 @@ globals:
     type: float[14]
     restore_value: false
 
+  # Soil moisture 9-10 am average: [0] two days ago, [1] yesterday; NAN = no
+  # data. Filled by fetch_soil_history.
+  - id: soil_history
+    type: float[2]
+    restore_value: false
+
   # True once a snapshot tile has its first picture; until then a new
   # entity_picture token alone also triggers a download.
   - id: snap_front_loaded
@@ -3402,6 +3469,92 @@ script:
                       tag: energy
                       format: "recorder.get_statistics failed: %s"
                       args: ['error.c_str()']
+
+  # Soil moisture history: the 9-10 am hourly mean of ${soil_moisture_entity}
+  # two days ago and yesterday, one recorder.get_statistics call per day.
+  - id: fetch_soil_history
+    mode: single
+    then:
+      - if:
+          condition:
+            and:
+              - api.connected:
+              - time.has_time:
+                  id: my_time
+          then:
+            - lambda: |-
+                for (auto &v : id(soil_history)) v = NAN;
+            - homeassistant.action:
+                action: recorder.get_statistics
+                data:
+                  statistic_ids: ${soil_moisture_entity}
+                  period: hour
+                  types: mean
+                  start_time: !lambda |-
+                    return ESPTime::from_epoch_local(id(my_time).now().timestamp - 2 * 86400)
+                        .strftime("%Y-%m-%d 09:00:00");
+                  end_time: !lambda |-
+                    return ESPTime::from_epoch_local(id(my_time).now().timestamp - 2 * 86400)
+                        .strftime("%Y-%m-%d 10:00:00");
+                capture_response: true
+                on_success:
+                  - lambda: |-
+                      JsonObjectConst root = response["response"].is<JsonObjectConst>()
+                          ? response["response"].as<JsonObjectConst>() : response;
+                      JsonArrayConst rows =
+                          root["statistics"]["${soil_moisture_entity}"].as<JsonArrayConst>();
+                      if (rows.size() > 0) id(soil_history)[0] = rows[0]["mean"] | NAN;
+                  - script.execute: draw_soil_labels
+                on_error:
+                  - logger.log:
+                      level: WARN
+                      tag: soil
+                      format: "recorder.get_statistics failed: %s"
+                      args: ['error.c_str()']
+            - homeassistant.action:
+                action: recorder.get_statistics
+                data:
+                  statistic_ids: ${soil_moisture_entity}
+                  period: hour
+                  types: mean
+                  start_time: !lambda |-
+                    return ESPTime::from_epoch_local(id(my_time).now().timestamp - 86400)
+                        .strftime("%Y-%m-%d 09:00:00");
+                  end_time: !lambda |-
+                    return ESPTime::from_epoch_local(id(my_time).now().timestamp - 86400)
+                        .strftime("%Y-%m-%d 10:00:00");
+                capture_response: true
+                on_success:
+                  - lambda: |-
+                      JsonObjectConst root = response["response"].is<JsonObjectConst>()
+                          ? response["response"].as<JsonObjectConst>() : response;
+                      JsonArrayConst rows =
+                          root["statistics"]["${soil_moisture_entity}"].as<JsonArrayConst>();
+                      if (rows.size() > 0) id(soil_history)[1] = rows[0]["mean"] | NAN;
+                  - script.execute: draw_soil_labels
+                on_error:
+                  - logger.log:
+                      level: WARN
+                      tag: soil
+                      format: "recorder.get_statistics failed: %s"
+                      args: ['error.c_str()']
+
+  # Day name + value for the two history slots ("Tue 45%"; "--%" = no data).
+  - id: draw_soil_labels
+    then:
+      - lambda: |-
+          lv_obj_t *labels[2] = {id(soil_day1_label), id(soil_day2_label)};
+          const time_t now = id(my_time).now().timestamp;
+          for (int i = 0; i < 2; i++) {
+            const std::string day = ESPTime::from_epoch_local(now - (2 - i) * 86400).strftime("%a");
+            const float v = id(soil_history)[i];
+            char text[24];
+            if (std::isnan(v))
+              snprintf(text, sizeof(text), "%s --%%", day.c_str());
+            else
+              snprintf(text, sizeof(text), "%s %.0f%%", day.c_str(), v);
+            lv_label_set_text(labels[i], text);
+          }
 
   # Scales the 14 bars to the busiest day; days without data show as a stub.
   - id: draw_energy_bars
@@ -4060,6 +4213,17 @@ sensor:
           id: humidity_label
           text:
             format: "%.0f%%"
+            args: ['x']
+
+  - platform: homeassistant
+    id: ha_soil_moisture
+    entity_id: ${soil_moisture_entity}
+    internal: true
+    on_value:
+      - lvgl.label.update:
+          id: soil_now_label
+          text:
+            format: "Now %.0f%%"
             args: ['x']
 
 text_sensor:
