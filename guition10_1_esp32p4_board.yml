@@ -205,6 +205,9 @@ esphome:
         - number.set:
             id: master_volume
             value: 70
+        # Light tiles once HA has had time to send the light states.
+        - delay: 8s
+        - script.execute: light_tiles_check
 
 psram:
   mode: hex
@@ -882,12 +885,15 @@ image:
     resize: 1280x800
     type: RGB565
     byte_order: little_endian
-  # Lights card: TV floor lamp photo at the top of its tile (images/floorlamp.webp).
+  # Lights card: TV floor lamp filling its whole 81x182 tile. The PNG is
+  # already that size with a transparent background, so the tile's grey
+  # (off) or amber (on) colour shows around the lamp.
   - platform: file
     file: ${images_base}floorlamp.png
     id: img_floor_lamp
-    resize: 72x144
+    resize: 81x182
     type: RGB565
+    transparency: alpha_channel
     byte_order: little_endian
   # Intercom card door-station photo, fitted to the 130x174 slot. Save PNGs
   # without metadata: ESPHome treats a file with "<svg" in its first 1 KB as
@@ -992,6 +998,7 @@ lvgl:
       shadow_width: 0
     - id: scene_btn
       bg_color: 0x202B3B
+      bg_opa: 50%
       border_color: 0x34445A
       border_width: 1
       radius: 12
@@ -1061,16 +1068,14 @@ lvgl:
             time: 250ms
       widgets:
         # =====================================================================
-        # SOIL MOISTURE (top, left of the status)  col 4 span 4 | row 0
-        # "Soil Humidity", then two days ago | yesterday (9-10 am average) |
-        # today, separated by grey bars.
+        # SOIL MOISTURE (top, left of the status)  col 4 span 4 
         # =====================================================================
-        - obj:
+        - obj: #Soil moisture status
             styles: cell_style
             scrollable: false
-            grid_cell_column_pos: 4
+            grid_cell_column_pos: 5
             grid_cell_row_pos: 0
-            grid_cell_column_span: 4
+            grid_cell_column_span: 5
             grid_cell_row_span: 1
             grid_cell_x_align: STRETCH
             grid_cell_y_align: STRETCH
@@ -1116,12 +1121,12 @@ lvgl:
         # STATUS (top right): ESP32-C6 firmware + Wi-Fi  col 8 span 5 | row 0
         # update_status_bar refreshes it every 10 s.
         # =====================================================================
-        - obj:
+        - obj: #Top right status bar
             styles: cell_style
             scrollable: false
-            grid_cell_column_pos: 8
+            grid_cell_column_pos: 10
             grid_cell_row_pos: 0
-            grid_cell_column_span: 5
+            grid_cell_column_span: 3
             grid_cell_row_span: 1
             grid_cell_x_align: STRETCH
             grid_cell_y_align: STRETCH
@@ -2579,12 +2584,13 @@ lvgl:
                                     transform_pivot_y: 10
 
         # =====================================================================
-        # 9. SCENES                          col 6 span 4 | row 12 span 5
+        # 9. SCENES                          col 9 span 4 | row 12 span 5
         # =====================================================================
-        - obj:
+        - obj:  # Scenes
+            id: card_scenes_cell
             styles: cell_style
             scrollable: false
-            grid_cell_column_pos: 6
+            grid_cell_column_pos: 9
             grid_cell_row_pos: 12
             grid_cell_column_span: 4
             grid_cell_row_span: 5
@@ -2610,7 +2616,7 @@ lvgl:
                         text: "Scenes"
                     # Four scenes in a 2 x 2 grid: 172 x 86 px, 10 px gaps,
                     # icon on the left and the name beside it.
-                    - button:
+                    - button:  #Scene Home
                         id: scene_home_btn
                         styles: scene_btn
                         x: 12
@@ -2630,8 +2636,8 @@ lvgl:
                           - script.execute: {id: scene_select, which: 0}
                         widgets:
                           - label: {align: LEFT_MID, x: 14, text: "\U000F02DC", text_font: font_mdi_36, text_color: 0xFFFFFF}
-                          - label: {align: LEFT_MID, x: 62, text: "Home", text_font: font_body}
-                    - button:
+                          - label: {align: LEFT_MID, x: 62, text: "Home", text_font: font_small}
+                    - button:  #Scene Night
                         id: scene_night_btn
                         styles: scene_btn
                         x: 194
@@ -2649,8 +2655,8 @@ lvgl:
                           - script.execute: {id: scene_select, which: 1}
                         widgets:
                           - label: {align: LEFT_MID, x: 14, text: "\U000F0594", text_font: font_mdi_36, text_color: 0xB8C8F0}
-                          - label: {align: LEFT_MID, x: 62, text: "Night", text_font: font_body}
-                    - button:
+                          - label: {align: LEFT_MID, x: 62, text: "Night", text_font: font_small}
+                    - button:  #Scene Movie
                         id: scene_movie_btn
                         styles: scene_btn
                         x: 12
@@ -2668,8 +2674,8 @@ lvgl:
                           - script.execute: {id: scene_select, which: 2}
                         widgets:
                           - label: {align: LEFT_MID, x: 14, text: "\U000F0FCE", text_font: font_mdi_36, text_color: 0xB8C8F0}
-                          - label: {align: LEFT_MID, x: 62, text: "Movie", text_font: font_body}
-                    - button:
+                          - label: {align: LEFT_MID, x: 62, text: "Movie", text_font: font_small}
+                    - button:  #Scene Cat Away
                         id: scene_cat_away_btn
                         styles: scene_btn
                         x: 194
@@ -2687,18 +2693,19 @@ lvgl:
                           - script.execute: {id: scene_select, which: 3}
                         widgets:
                           - label: {align: LEFT_MID, x: 14, text: "\U000F011B", text_font: font_mdi_36, text_color: 0xB8C8F0}
-                          - label: {align: LEFT_MID, x: 62, text: "Cat Away", text_font: font_body}
+                          - label: {align: LEFT_MID, x: 62, text: "Cat Away", text_font: font_small}
 
         # =====================================================================
-        # 10. LIGHTS                         col 10 span 3 | row 12 span 5
+        # 10. Living room LIGHTS                         col 6 span 3 | row 12 span 5
         # Three toggle tiles. Off: dark grey. On: amber with an amber glow
         # (the "checked" state, set from the HA light state by the
         # light_*_on binary sensors). Tap toggles the light in HA.
         # =====================================================================
-        - obj:
+        - obj: #Living room lights
+            id: card_lights_cell
             styles: cell_style
             scrollable: false
-            grid_cell_column_pos: 10
+            grid_cell_column_pos: 6
             grid_cell_row_pos: 12
             grid_cell_column_span: 3
             grid_cell_row_span: 5
@@ -2727,12 +2734,13 @@ lvgl:
                         styles: light_tile
                         x: 12
                         y: 44
+                        clip_corner: true       # lamp image keeps the tile's rounded corners
                         checked:
                           bg_color: 0xD9901A
                           border_color: 0xFBBF24
                           shadow_color: 0xF59E0B
                           shadow_width: 24
-                          shadow_spread: 2
+                          shadow_spread: 3
                           shadow_opa: 60%
                         on_click:
                           - homeassistant.action:
@@ -2742,15 +2750,14 @@ lvgl:
                         widgets:
                           - image:
                               src: img_floor_lamp
-                              align: TOP_MID
-                              y: 12
-                              radius: 8
-                              clip_corner: true
+                              align: CENTER       # exactly the tile size
+                              y: -12
+                              clickable: false
                           - label:
                               align: BOTTOM_MID
-                              y: -10
+                              y: 15
                               width: 76
-                              text: "TV Floor Lamp"
+                              text: "TV Lamp"
                               text_align: CENTER
                               long_mode: WRAP
                               text_font: font_small
@@ -2765,7 +2772,7 @@ lvgl:
                           border_color: 0xFBBF24
                           shadow_color: 0xF59E0B
                           shadow_width: 24
-                          shadow_spread: 2
+                          shadow_spread: 3
                           shadow_opa: 60%
                         on_click:
                           - homeassistant.action:
@@ -2799,7 +2806,7 @@ lvgl:
                           border_color: 0xFBBF24
                           shadow_color: 0xF59E0B
                           shadow_width: 24
-                          shadow_spread: 2
+                          shadow_spread: 3
                           shadow_opa: 60%
                         on_click:
                           - homeassistant.action:
@@ -3004,7 +3011,7 @@ lvgl:
               # ------------------------------------------------------------------
               - label:
                   width: ${settings_row_width}
-                  text: "P4 Controls"
+                  text: "Living Room Controls"
                   text_align: CENTER
                   text_color: 0xFFFFFF
                   text_font: ${settings_label_font}
@@ -4335,6 +4342,79 @@ script:
       - lvgl.widget.update: {id: scene_movie_btn, state: {checked: !lambda 'return which == 2;'}}
       - lvgl.widget.update: {id: scene_cat_away_btn, state: {checked: !lambda 'return which == 3;'}}
 
+  # Lights card tiles from the HA light state (same method as the 4" panel):
+  # on = amber tile with an amber glow and a white icon, off/unknown = dark
+  # grey tile and grey icon. Sets the colours directly, so it can be re-run
+  # at any time (light change, 8 s after boot, every 3 s).
+  - id: light_tiles_check
+    then:
+      - if:
+          condition:
+            binary_sensor.is_on: light_tv_lamp_on
+          then:
+            - lvgl.widget.update:
+                id: light_tv_lamp_btn
+                bg_color: 0xD9901A
+                border_color: 0xFBBF24
+                shadow_color: 0xF59E0B
+                shadow_width: 24
+                shadow_spread: 3
+                shadow_opa: 60%
+          else:
+            - lvgl.widget.update:
+                id: light_tv_lamp_btn
+                bg_color: 0x2A2F38
+                border_color: 0x3A4150
+                shadow_width: 0
+      - if:
+          condition:
+            binary_sensor.is_on: light_living_left_on
+          then:
+            - lvgl.widget.update:
+                id: light_living_left_btn
+                bg_color: 0xD9901A
+                border_color: 0xFBBF24
+                shadow_color: 0xF59E0B
+                shadow_width: 24
+                shadow_spread: 3
+                shadow_opa: 60%
+            - lvgl.label.update:
+                id: light_living_left_icon
+                text_color: 0xFFFFFF
+          else:
+            - lvgl.widget.update:
+                id: light_living_left_btn
+                bg_color: 0x2A2F38
+                border_color: 0x3A4150
+                shadow_width: 0
+            - lvgl.label.update:
+                id: light_living_left_icon
+                text_color: 0x8995A7
+      - if:
+          condition:
+            binary_sensor.is_on: light_living_right_on
+          then:
+            - lvgl.widget.update:
+                id: light_living_right_btn
+                bg_color: 0xD9901A
+                border_color: 0xFBBF24
+                shadow_color: 0xF59E0B
+                shadow_width: 24
+                shadow_spread: 3
+                shadow_opa: 60%
+            - lvgl.label.update:
+                id: light_living_right_icon
+                text_color: 0xFFFFFF
+          else:
+            - lvgl.widget.update:
+                id: light_living_right_btn
+                bg_color: 0x2A2F38
+                border_color: 0x3A4150
+                shadow_width: 0
+            - lvgl.label.update:
+                id: light_living_right_icon
+                text_color: 0x8995A7
+
   - id: heater_update_buttons
     then:
       - lvgl.widget.update:
@@ -4462,40 +4542,26 @@ binary_sensor:
     on_state:
       - script.execute: garage_update_button
 
-  # Lights card: HA light state -> tile on (amber, checked) / off (grey).
+  # Lights card: HA light state. light_tiles_check redraws the tiles on every
+  # change; it also runs after boot and every 3 s (see on_boot / interval).
   - platform: homeassistant
     id: light_tv_lamp_on
     entity_id: ${light_tv_lamp_entity}
     internal: true
     on_state:
-      - lvgl.widget.update:
-          id: light_tv_lamp_btn
-          state:
-            checked: !lambda 'return x;'
+      - script.execute: light_tiles_check
   - platform: homeassistant
     id: light_living_left_on
     entity_id: ${light_living_left_entity}
     internal: true
     on_state:
-      - lvgl.widget.update:
-          id: light_living_left_btn
-          state:
-            checked: !lambda 'return x;'
-      - lvgl.label.update:
-          id: light_living_left_icon
-          text_color: !lambda 'return x ? lv_color_hex(0xFFFFFF) : lv_color_hex(0x8995A7);'
+      - script.execute: light_tiles_check
   - platform: homeassistant
     id: light_living_right_on
     entity_id: ${light_living_right_entity}
     internal: true
     on_state:
-      - lvgl.widget.update:
-          id: light_living_right_btn
-          state:
-            checked: !lambda 'return x;'
-      - lvgl.label.update:
-          id: light_living_right_icon
-          text_color: !lambda 'return x ? lv_color_hex(0xFFFFFF) : lv_color_hex(0x8995A7);'
+      - script.execute: light_tiles_check
 
   # Gas heater: highlight Off / Heat / Fan from the Rinnai switches
   - platform: homeassistant
@@ -4831,6 +4897,11 @@ interval:
   - interval: 120s
     then:
       - script.execute: update_status_bar
+
+  # Lights card: re-sync the tiles with HA (catches a missed state update).
+  - interval: 3s
+    then:
+      - script.execute: light_tiles_check
 
   # Settings page uptime ticks every second, only while that page is shown.
   - interval: 1s
