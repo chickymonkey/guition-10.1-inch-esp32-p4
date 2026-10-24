@@ -884,16 +884,16 @@ image:
     byte_order: little_endian
   # Lights card: TV floor lamp photo at the top of its tile (images/floorlamp.webp).
   - platform: file
-    file: ${images_base}floorlamp.webp
+    file: ${images_base}floorlamp.png
     id: img_floor_lamp
-    resize: 72x72
+    resize: 72x144
     type: RGB565
     byte_order: little_endian
   # Intercom card door-station photo, fitted to the 130x174 slot. "?v=" makes
   # ESPHome download it again under a new cache name; bump it after replacing
   # the image on GitHub (GitHub ignores the query).
   - platform: file
-    file: ${images_base}smart_intercom_panel.png?v=2
+    file: ${images_base}intercom_panel.png
     id: img_intercom_panel
     resize: 130x174
     type: RGB565
