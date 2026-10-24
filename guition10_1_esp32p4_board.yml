@@ -893,7 +893,7 @@ image:
   # without metadata: ESPHome treats a file with "<svg" in its first 1 KB as
   # an SVG and fails with "not valid UTF-8".
   - platform: file
-    file: ${images_base}intercom_panel.png
+    file: ${images_base}intercom_panel.png?v=2
     id: img_intercom_panel
     resize: 130x174
     type: RGB565
@@ -1085,7 +1085,7 @@ lvgl:
                   text_font: font_mdi_24
                   text_color: 0x47B7E9
               - label:
-                  text: "Soil Humidity"
+                  text: "Soil Humidity:"
                   text_font: font_small
                   text_color: 0xAAB8EE
               - label:
@@ -1694,27 +1694,7 @@ lvgl:
                         x: 48
                         y: 8
                         text: "Intercom"
-                    # Glow behind the dark door-station photo so it stands out
-                    # from the charcoal card: grey at the top to white at the
-                    # bottom, with a soft white halo.
-                    - obj:
-                        align: BOTTOM_LEFT
-                        x: 14
-                        y: -12
-                        width: 130
-                        height: 174
-                        radius: 14
-                        border_width: 0
-                        pad_all: 0
-                        scrollable: false
-                        clickable: false
-                        bg_color: 0x9CA3AF
-                        bg_grad_color: 0xF1F5F9
-                        bg_grad_dir: VER
-                        shadow_color: 0xFFFFFF
-                        shadow_width: 26
-                        shadow_spread: 2
-                        shadow_opa: 35%
+                 
                     - image:        # door-station photo, fitted to 130x174
                         src: img_intercom_panel
                         align: BOTTOM_LEFT
