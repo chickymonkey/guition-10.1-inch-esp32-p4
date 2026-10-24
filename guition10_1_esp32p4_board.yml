@@ -889,9 +889,11 @@ image:
     resize: 72x72
     type: RGB565
     byte_order: little_endian
-  # Intercom card door-station photo, fitted to the 130x174 slot.
+  # Intercom card door-station photo, fitted to the 130x174 slot. "?v=" makes
+  # ESPHome download it again under a new cache name; bump it after replacing
+  # the image on GitHub (GitHub ignores the query).
   - platform: file
-    file: ${images_base}smart_intercom_panel.png
+    file: ${images_base}smart_intercom_panel.png?v=2
     id: img_intercom_panel
     resize: 130x174
     type: RGB565
