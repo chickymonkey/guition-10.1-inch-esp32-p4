@@ -889,9 +889,9 @@ image:
     resize: 72x144
     type: RGB565
     byte_order: little_endian
-  # Intercom card door-station photo, fitted to the 130x174 slot. "?v=" makes
-  # ESPHome download it again under a new cache name; bump it after replacing
-  # the image on GitHub (GitHub ignores the query).
+  # Intercom card door-station photo, fitted to the 130x174 slot. Save PNGs
+  # without metadata: ESPHome treats a file with "<svg" in its first 1 KB as
+  # an SVG and fails with "not valid UTF-8".
   - platform: file
     file: ${images_base}intercom_panel.png
     id: img_intercom_panel
