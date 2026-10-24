@@ -148,6 +148,10 @@ substitutions:
   scene_night_entity: scene.sleep
   scene_movie_entity: scene.movie_night
   scene_cat_away_entity: scene.cat_away
+  # Lights card (bottom right): one toggle tile per light.
+  light_tv_lamp_entity: light.tv_floor_lamp
+  light_living_left_entity: light.living_room_left
+  light_living_right_entity: light.living_room_right
   # Frigate "last person" snapshots for the home page camera tiles, fetched
   # from HA's image proxy. ha_base_url must be reachable from this device.
   ha_base_url: "http://homeassistant.local:8123"
@@ -825,6 +829,7 @@ font:
       - "\U000F092F"  # wifi-strength-outline
       - "\U000F05AA"  # wifi-off
       - "\U000F061A"  # chip
+      - "\U000F06E8"  # lightbulb-on (Lights card title)
 
   - file: "https://raw.githubusercontent.com/Templarian/MaterialDesign-Webfont/master/fonts/materialdesignicons-webfont.ttf"
     id: font_mdi_36
@@ -856,6 +861,7 @@ font:
       - "\U000F0737"  # arrow-up-bold
       - "\U000F0666"  # stop-circle
       - "\U000F072E"  # arrow-down-bold
+      - "\U000F0769"  # ceiling-light (Lights card)
 
 # Card photos, from this repo's images/ folder (transparent PNG backgrounds).
 # resize keeps the aspect ratio and fits inside the given box.
@@ -876,6 +882,13 @@ image:
     resize: 1280x800
     type: RGB565
     byte_order: little_endian
+  # Lights card: TV floor lamp photo at the top of its tile (images/floorlamp.webp).
+  - platform: file
+    file: ${images_base}floorlamp.webp
+    id: img_floor_lamp
+    resize: 72x72
+    type: RGB565
+    byte_order: little_endian
   # Intercom card door-station photo, fitted to the 130x174 slot.
   - platform: file
     file: ${images_base}smart_intercom_panel.png
@@ -891,7 +904,7 @@ image:
     url: ${ha_base_url}/
     format: JPEG
     type: RGB565
-    resize: 320x196        # fits the 196 px tile: a square snapshot shows whole
+    resize: 196x196        # fits the 196x196 snapshot area of the tile, whole
     update_interval: never
     buffer_size: 65536
     on_download_finished:
@@ -910,7 +923,7 @@ image:
     url: ${ha_base_url}/
     format: JPEG
     type: RGB565
-    resize: 320x196
+    resize: 196x196
     update_interval: never
     buffer_size: 65536
     on_download_finished:
@@ -948,8 +961,11 @@ lvgl:
       border_width: 0
       radius: 0
       pad_all: 6
+    # Glass cards: 50 % see-through over the home page wallpaper. (LVGL here
+    # has no backdrop blur, so the wallpaper shows through unblurred.)
     - id: card_style
       bg_color: 0x151D2B
+      bg_opa: 50%
       border_color: 0x2A3546
       border_width: 1
       radius: 14
@@ -977,6 +993,17 @@ lvgl:
       border_color: 0x34445A
       border_width: 1
       radius: 12
+      shadow_width: 0
+    # Lights card tile, off state (dark grey). The on state (amber + glow) is
+    # each tile's "checked:" block.
+    - id: light_tile
+      width: 81
+      height: 182
+      radius: 12
+      pad_all: 0
+      bg_color: 0x2A2F38
+      border_color: 0x3A4150
+      border_width: 1
       shadow_width: 0
     - id: tile_style
       border_width: 1
@@ -1033,8 +1060,8 @@ lvgl:
       widgets:
         # =====================================================================
         # SOIL MOISTURE (top, left of the status)  col 4 span 4 | row 0
-        # "Soil Humidity" | two days ago | yesterday (9-10 am average) | today,
-        # between grey bars.
+        # "Soil Humidity", then two days ago | yesterday (9-10 am average) |
+        # today, separated by grey bars.
         # =====================================================================
         - obj:
             styles: cell_style
@@ -1052,10 +1079,6 @@ lvgl:
               flex_align_cross: CENTER
             widgets:
               - label:
-                  text: "|"
-                  text_font: font_small
-                  text_color: 0xAAAAAA
-              - label:
                   text: "\U000F058C"
                   text_font: font_mdi_24
                   text_color: 0x47B7E9
@@ -1069,19 +1092,23 @@ lvgl:
                   text_font: font_small
                   text_color: 0xAAB8EE
               - label:
+                  text: "|"
+                  text_font: font_small
+                  text_color: 0xAAAAAA
+              - label:
                   id: soil_day2_label
                   text: "-- --%"
-                  text_font: font_small
-                  text_color: 0xAAB8EE
-              - label:
-                  id: soil_now_label
-                  text: "Today --%"
                   text_font: font_small
                   text_color: 0xAAB8EE
               - label:
                   text: "|"
                   text_font: font_small
                   text_color: 0xAAAAAA
+              - label:
+                  id: soil_now_label
+                  text: "Today --%"
+                  text_font: font_small
+                  text_color: 0xAAB8EE
 
         # =====================================================================
         # STATUS (top right): ESP32-C6 firmware + Wi-Fi  col 8 span 5 | row 0
@@ -1379,12 +1406,12 @@ lvgl:
                                 - label: {align: CENTER, text: "Fan", text_font: font_small}
 
         # =====================================================================
-        # 3. FRONT DOOR LOCK                 col 9 span 1 | row 1 span 5
+        # 3. FRONT DOOR LOCK                 col 11 span 1 | row 1 span 5
         # =====================================================================
         - obj:
             styles: cell_style
             scrollable: false
-            grid_cell_column_pos: 9
+            grid_cell_column_pos: 11
             grid_cell_row_pos: 1
             grid_cell_column_span: 1
             grid_cell_row_span: 5
@@ -1445,12 +1472,12 @@ lvgl:
                               text_color: 0xFFFFFF
 
         # =====================================================================
-        # 3b. GARAGE DOOR LOCK               col 10 span 1 | row 1 span 5
+        # 3b. GARAGE DOOR LOCK               col 12 span 1 | row 1 span 5
         # =====================================================================
         - obj:
             styles: cell_style
             scrollable: false
-            grid_cell_column_pos: 10
+            grid_cell_column_pos: 12
             grid_cell_row_pos: 1
             grid_cell_column_span: 1
             grid_cell_row_span: 5
@@ -1510,12 +1537,12 @@ lvgl:
                               text_color: 0xFFFFFF
 
         # =====================================================================
-        # 4. GARAGE Roller DOOR                     col 11 span 2 | row 1 span 5
+        # 4. GARAGE Roller DOOR                     col 9 span 2 | row 1 span 5
         # =====================================================================
         - obj:
             styles: cell_style
             scrollable: false
-            grid_cell_column_pos: 11
+            grid_cell_column_pos: 9
             grid_cell_row_pos: 1
             grid_cell_column_span: 2
             grid_cell_row_span: 5
@@ -2441,14 +2468,14 @@ lvgl:
                               text_color: 0xFFFFFF
 
         # =====================================================================
-        # 8. SECURITY CAMERAS                col 1 span 7 | row 12 span 5
+        # 8. SECURITY CAMERAS                col 1 span 5 | row 12 span 5
         # =====================================================================
         - obj:
             styles: cell_style
             scrollable: false
             grid_cell_column_pos: 1
             grid_cell_row_pos: 12
-            grid_cell_column_span: 7
+            grid_cell_column_span: 5
             grid_cell_row_span: 5
             grid_cell_x_align: STRETCH
             grid_cell_y_align: STRETCH
@@ -2472,10 +2499,11 @@ lvgl:
                         text: "Cameras"
                     - obj:          # Front Door: last Frigate person snapshot
                         id: cam_front
+                        styles: card_style
                         x: 12
                         y: 42
-                        width: 320
-                        height: 196         # whole square snapshot (resize 320x196)
+                        width: 221          # 20 px name strip + 5 px gap + 196 px snapshot
+                        height: 196
                         radius: 10
                         border_width: 0
                         pad_all: 0
@@ -2492,13 +2520,11 @@ lvgl:
                           - image:
                               id: cam_front_snapshot
                               src: snap_front_img
-                              align: CENTER
-                              x: 15                       # centred in the area right of the label strip
+                              align: RIGHT_MID            # fills the area right of the name strip
                               clickable: false
-                          
                           - obj:
                               align: LEFT_MID
-                              width: 30
+                              width: 20
                               height: 100%
                               radius: 0
                               border_width: 0
@@ -2522,9 +2548,10 @@ lvgl:
                                     transform_pivot_y: 10
                     - obj:          # Driveway: last Frigate person snapshot
                         id: cam_driveway
-                        x: 345
+                        styles: card_style
+                        x: 246              # 13 px gap after the 221 px Front Door tile
                         y: 42
-                        width: 320
+                        width: 221
                         height: 196
                         radius: 10
                         border_width: 0
@@ -2542,12 +2569,11 @@ lvgl:
                           - image:
                               id: cam_driveway_snapshot
                               src: snap_driveway_img
-                              align: CENTER
-                              x: 15
+                              align: RIGHT_MID
                               clickable: false
                           - obj:              # name strip, as on the Front Door tile
                               align: LEFT_MID
-                              width: 30
+                              width: 20
                               height: 100%
                               radius: 0
                               border_width: 0
@@ -2571,14 +2597,14 @@ lvgl:
                                     transform_pivot_y: 10
 
         # =====================================================================
-        # 9. SCENES                          col 8 span 5 | row 12 span 5
+        # 9. SCENES                          col 6 span 4 | row 12 span 5
         # =====================================================================
         - obj:
             styles: cell_style
             scrollable: false
-            grid_cell_column_pos: 8
+            grid_cell_column_pos: 6
             grid_cell_row_pos: 12
-            grid_cell_column_span: 5
+            grid_cell_column_span: 4
             grid_cell_row_span: 5
             grid_cell_x_align: STRETCH
             grid_cell_y_align: STRETCH
@@ -2600,14 +2626,15 @@ lvgl:
                         x: 48
                         y: 6
                         text: "Scenes"
-                    # Four scenes, 105 px wide with 12 px gaps.
+                    # Four scenes in a 2 x 2 grid: 172 x 86 px, 10 px gaps,
+                    # icon on the left and the name beside it.
                     - button:
                         id: scene_home_btn
                         styles: scene_btn
                         x: 12
-                        y: 46
-                        width: 105
-                        height: 146
+                        y: 44
+                        width: 172
+                        height: 86
                         state:
                           checked: true
                         checked:
@@ -2620,15 +2647,15 @@ lvgl:
                                 entity_id: ${scene_home_entity}
                           - script.execute: {id: scene_select, which: 0}
                         widgets:
-                          - label: {align: TOP_MID, y: 30, text: "\U000F02DC", text_font: font_mdi_36, text_color: 0xFFFFFF}
-                          - label: {align: BOTTOM_MID, y: -26, text: "Home", text_font: font_small}
+                          - label: {align: LEFT_MID, x: 14, text: "\U000F02DC", text_font: font_mdi_36, text_color: 0xFFFFFF}
+                          - label: {align: LEFT_MID, x: 62, text: "Home", text_font: font_body}
                     - button:
                         id: scene_night_btn
                         styles: scene_btn
-                        x: 129
-                        y: 46
-                        width: 105
-                        height: 146
+                        x: 194
+                        y: 44
+                        width: 172
+                        height: 86
                         checked:
                           bg_color: 0x4F7FE8
                           border_color: 0x82A5FF
@@ -2639,15 +2666,15 @@ lvgl:
                                 entity_id: ${scene_night_entity}
                           - script.execute: {id: scene_select, which: 1}
                         widgets:
-                          - label: {align: TOP_MID, y: 30, text: "\U000F0594", text_font: font_mdi_36, text_color: 0xB8C8F0}
-                          - label: {align: BOTTOM_MID, y: -26, text: "Night", text_font: font_small}
+                          - label: {align: LEFT_MID, x: 14, text: "\U000F0594", text_font: font_mdi_36, text_color: 0xB8C8F0}
+                          - label: {align: LEFT_MID, x: 62, text: "Night", text_font: font_body}
                     - button:
                         id: scene_movie_btn
                         styles: scene_btn
-                        x: 246
-                        y: 46
-                        width: 105
-                        height: 146
+                        x: 12
+                        y: 140
+                        width: 172
+                        height: 86
                         checked:
                           bg_color: 0x4F7FE8
                           border_color: 0x82A5FF
@@ -2658,15 +2685,15 @@ lvgl:
                                 entity_id: ${scene_movie_entity}
                           - script.execute: {id: scene_select, which: 2}
                         widgets:
-                          - label: {align: TOP_MID, y: 30, text: "\U000F0FCE", text_font: font_mdi_36, text_color: 0xB8C8F0}
-                          - label: {align: BOTTOM_MID, y: -26, text: "Movie", text_font: font_small}
+                          - label: {align: LEFT_MID, x: 14, text: "\U000F0FCE", text_font: font_mdi_36, text_color: 0xB8C8F0}
+                          - label: {align: LEFT_MID, x: 62, text: "Movie", text_font: font_body}
                     - button:
                         id: scene_cat_away_btn
                         styles: scene_btn
-                        x: 363
-                        y: 46
-                        width: 105
-                        height: 146
+                        x: 194
+                        y: 140
+                        width: 172
+                        height: 86
                         checked:
                           bg_color: 0x4F7FE8
                           border_color: 0x82A5FF
@@ -2677,8 +2704,143 @@ lvgl:
                                 entity_id: ${scene_cat_away_entity}
                           - script.execute: {id: scene_select, which: 3}
                         widgets:
-                          - label: {align: TOP_MID, y: 30, text: "\U000F011B", text_font: font_mdi_36, text_color: 0xB8C8F0}
-                          - label: {align: BOTTOM_MID, y: -26, text: "Cat Away", text_font: font_small}
+                          - label: {align: LEFT_MID, x: 14, text: "\U000F011B", text_font: font_mdi_36, text_color: 0xB8C8F0}
+                          - label: {align: LEFT_MID, x: 62, text: "Cat Away", text_font: font_body}
+
+        # =====================================================================
+        # 10. LIGHTS                         col 10 span 3 | row 12 span 5
+        # Three toggle tiles. Off: dark grey. On: amber with an amber glow
+        # (the "checked" state, set from the HA light state by the
+        # light_*_on binary sensors). Tap toggles the light in HA.
+        # =====================================================================
+        - obj:
+            styles: cell_style
+            scrollable: false
+            grid_cell_column_pos: 10
+            grid_cell_row_pos: 12
+            grid_cell_column_span: 3
+            grid_cell_row_span: 5
+            grid_cell_x_align: STRETCH
+            grid_cell_y_align: STRETCH
+            widgets:
+              - obj:
+                  id: card_lights
+                  styles: card_style
+                  width: 100%
+                  height: 100%
+                  scrollable: false
+                  widgets:
+                    - label:
+                        styles: icon_24
+                        x: 14
+                        y: 8
+                        text: "\U000F06E8"
+                    - label:
+                        styles: title_text
+                        x: 48
+                        y: 6
+                        text: "Lights"
+                    - button:
+                        id: light_tv_lamp_btn
+                        styles: light_tile
+                        x: 12
+                        y: 44
+                        checked:
+                          bg_color: 0xD9901A
+                          border_color: 0xFBBF24
+                          shadow_color: 0xF59E0B
+                          shadow_width: 24
+                          shadow_spread: 2
+                          shadow_opa: 60%
+                        on_click:
+                          - homeassistant.action:
+                              action: light.toggle
+                              data:
+                                entity_id: ${light_tv_lamp_entity}
+                        widgets:
+                          - image:
+                              src: img_floor_lamp
+                              align: TOP_MID
+                              y: 12
+                              radius: 8
+                              clip_corner: true
+                          - label:
+                              align: BOTTOM_MID
+                              y: -10
+                              width: 76
+                              text: "TV Floor Lamp"
+                              text_align: CENTER
+                              long_mode: WRAP
+                              text_font: font_small
+                              text_color: 0xFFFFFF
+                    - button:
+                        id: light_living_left_btn
+                        styles: light_tile
+                        x: 101
+                        y: 44
+                        checked:
+                          bg_color: 0xD9901A
+                          border_color: 0xFBBF24
+                          shadow_color: 0xF59E0B
+                          shadow_width: 24
+                          shadow_spread: 2
+                          shadow_opa: 60%
+                        on_click:
+                          - homeassistant.action:
+                              action: light.toggle
+                              data:
+                                entity_id: ${light_living_left_entity}
+                        widgets:
+                          - label:
+                              id: light_living_left_icon
+                              align: TOP_MID
+                              y: 30
+                              text: "\U000F0769"
+                              text_font: font_mdi_36
+                              text_color: 0x8995A7
+                          - label:
+                              align: BOTTOM_MID
+                              y: -10
+                              width: 76
+                              text: "Living Room Left"
+                              text_align: CENTER
+                              long_mode: WRAP
+                              text_font: font_small
+                              text_color: 0xFFFFFF
+                    - button:
+                        id: light_living_right_btn
+                        styles: light_tile
+                        x: 190
+                        y: 44
+                        checked:
+                          bg_color: 0xD9901A
+                          border_color: 0xFBBF24
+                          shadow_color: 0xF59E0B
+                          shadow_width: 24
+                          shadow_spread: 2
+                          shadow_opa: 60%
+                        on_click:
+                          - homeassistant.action:
+                              action: light.toggle
+                              data:
+                                entity_id: ${light_living_right_entity}
+                        widgets:
+                          - label:
+                              id: light_living_right_icon
+                              align: TOP_MID
+                              y: 30
+                              text: "\U000F0769"
+                              text_font: font_mdi_36
+                              text_color: 0x8995A7
+                          - label:
+                              align: BOTTOM_MID
+                              y: -10
+                              width: 76
+                              text: "Living Room Right"
+                              text_align: CENTER
+                              long_mode: WRAP
+                              text_font: font_small
+                              text_color: 0xFFFFFF
 
         # ---- row 17: small bottom margin (FR(10)), intentionally empty ------
 
@@ -4317,6 +4479,41 @@ binary_sensor:
     internal: true
     on_state:
       - script.execute: garage_update_button
+
+  # Lights card: HA light state -> tile on (amber, checked) / off (grey).
+  - platform: homeassistant
+    id: light_tv_lamp_on
+    entity_id: ${light_tv_lamp_entity}
+    internal: true
+    on_state:
+      - lvgl.widget.update:
+          id: light_tv_lamp_btn
+          state:
+            checked: !lambda 'return x;'
+  - platform: homeassistant
+    id: light_living_left_on
+    entity_id: ${light_living_left_entity}
+    internal: true
+    on_state:
+      - lvgl.widget.update:
+          id: light_living_left_btn
+          state:
+            checked: !lambda 'return x;'
+      - lvgl.label.update:
+          id: light_living_left_icon
+          text_color: !lambda 'return x ? lv_color_hex(0xFFFFFF) : lv_color_hex(0x8995A7);'
+  - platform: homeassistant
+    id: light_living_right_on
+    entity_id: ${light_living_right_entity}
+    internal: true
+    on_state:
+      - lvgl.widget.update:
+          id: light_living_right_btn
+          state:
+            checked: !lambda 'return x;'
+      - lvgl.label.update:
+          id: light_living_right_icon
+          text_color: !lambda 'return x ? lv_color_hex(0xFFFFFF) : lv_color_hex(0x8995A7);'
 
   # Gas heater: highlight Off / Heat / Fan from the Rinnai switches
   - platform: homeassistant
