@@ -1,5 +1,5 @@
 # =============================================================================
-# Guition JC8012P4A1 (ESP32-P4 10.1"): SIP JPEG videophone + HA dashboard
+# Guition JC8012P4A1C_I_W_Y1 (ESP32-P4 10.1" sku:10153002-v3 [2635]): SIP JPEG videophone + HA dashboard
 # Profile: VoIP only / single-mic AEC / P4 landscape
 #
 # Based on n-IA-hane/esphome-intercom
@@ -24,7 +24,7 @@
 #   The NS4150 amp (PA_CTRL) is only on while audio plays; esp_audio_stack
 #   on_amplifier_required / on_amplifier_idle switch it.
 #
-# Hardware [GUITION JC8012P4A1]:
+# Hardware [GUITION JC8012P4A1C_I_W_Y1]:
 #   - ESP32-P4 (16MB flash, 32MB hex PSRAM), ESP32-C6 Wi-Fi over SDIO
 #   - 10.1" 800x1280 MIPI-DSI (JD9365), landscape UI; GSL3680 touch (0x40)
 #   - ES8311 codec (0x18), NS4150 amp (PA_CTRL GPIO20)
@@ -38,8 +38,7 @@
 #   Video call:    full-width remote video with a hang-up strip
 #   BOOT button:   short press answers / calls / hangs up, long press mic mute
 
-# =============================================================================
-# PROJECT SETUP
+# =======PROJECT SETUP=========================================================
 
 substitutions:
   name: guition-p4-101
@@ -142,6 +141,9 @@ substitutions:
   # Status bar: current soil moisture plus the 9-10 am average of the last two
   # days (HA long-term statistics, so the sensor needs a state_class).
   soil_moisture_entity: sensor.current_soil_moisture
+  # The sensor reports volumetric water content in m³/m³ (0.167 = 16.7 %);
+  # values are multiplied by this to show a percentage. Use 1 for a % sensor.
+  soil_moisture_scale: "100"
   scene_home_entity: scene.back_home
   scene_night_entity: scene.sleep
   scene_movie_entity: scene.movie_night
@@ -177,9 +179,7 @@ packages:
   http_media_codecs: github://n-IA-hane/esphome-intercom/packages/audio/http_media_codecs.yaml@main
   flac_codecs_psram: github://n-IA-hane/esphome-intercom/packages/audio/flac_codecs_psram.yaml@main
 
-# =============================================================================
-# BOARD AND MEMORY
-# =============================================================================
+# =======BOARD AND MEMORY======================================================
 
 esphome:
   min_version: 2026.9.0
@@ -192,12 +192,15 @@ esphome:
         - lambda: id(peer_name) = id(phone).get_current_destination();
     - priority: -100
       then:
-        - output.set_level:
-            id: backlight_pwm
-            level: 100%
-        - script.execute: backlight_timer
+        - script.execute: backlight_timer     # sets the saved Screen Brightness
+        - script.execute: home_return_timer
         # Amp off until a call, ring or playback needs it (idle amp = hiss/squeal).
         - output.turn_off: speaker_enable
+        # Start at 70 % master volume on every boot (the number would otherwise
+        # restore the last saved level, 100 % by default).
+        - number.set:
+            id: master_volume
+            value: 70
 
 psram:
   mode: hex
@@ -227,9 +230,7 @@ esp32:
       execute_from_psram: true
       compiler_optimization: "PERF"
 
-# =============================================================================
-# EXTERNAL COMPONENTS
-# =============================================================================
+# =======EXTERNAL COMPONENTS===================================================
 
 external_components:
   - source: ${voip_stack_components_source}
@@ -281,9 +282,8 @@ esp_rtsp_stream:
 http_request:
   verify_ssl: false
   timeout: 10s
-# =============================================================================
-# CONNECTIVITY
-# =============================================================================
+
+# =======CONNECTIVITY==========================================================
 
 network:
   # Keep lwIP conservative on hosted P4+C6: internal DMA heap is the limit.
@@ -397,8 +397,7 @@ time:
         then:
           - script.execute: fetch_soil_history
 
-# BUSES AND CAMERA
-# =============================================================================
+# =======BUSES AND CAMERA======================================================
 
 i2c:
   - id: internal_i2c
@@ -423,8 +422,7 @@ esp_video_camera:
   # "Camera" switch shows and controls that.
   #internal: true
 
-# =============================================================================
-# OUTPUTS AND LIGHTS
+# =======OUTPUTS AND LIGHTS====================================================
 
 output:
   - platform: ledc
@@ -445,8 +443,7 @@ light:
     restore_mode: ALWAYS_ON
     default_transition_length: 250ms
 
-# =============================================================================
-# AUDIO PIPELINE
+# =======AUDIO PIPELINE========================================================
 
 # [GUITION] ES8311 is both DAC and ADC. The single analog microphone is on
 # MIC1P/N. With no_dac_ref: false the codec returns its own DAC output on the
@@ -598,9 +595,7 @@ media_player:
         - announcement_http_source
         - ringtone_file_source
 
-# =============================================================================
-# VOIP
-# =============================================================================
+# =======VOIP==================================================================
 
 voip_stack:
   use_ha_as_first_contact: true
@@ -699,9 +694,7 @@ voip_stack:
     - lambda: id(peer_name) = destination;
     - script.execute: update_ic_idle_labels
 
-# =============================================================================
-# DISPLAY AND UI
-# =============================================================================
+# =======DISPLAY AND UI========================================================
 
 # [GUITION] JD9365 panel. "New Panel" boards use JC8012P4A1-V2 (70 MHz /
 # 1.5 Gbps); the original panel is JC8012P4A1 (60 MHz / 1 Gbps).
@@ -730,10 +723,10 @@ touchscreen:
           tag: touch
           format: "Touch x=%d y=%d"
           args: ['touch.x', 'touch.y']
-      - output.set_level:
-          id: backlight_pwm
-          level: 100%
+      # Any touch counts as activity: wake the backlight (backlight_timer sets
+      # the chosen brightness) and restart the return-to-home countdown.
       - script.execute: backlight_timer
+      - script.execute: home_return_timer
 
 font:
   - file:
@@ -875,6 +868,14 @@ image:
     type: RGB565
     transparency: alpha_channel
     byte_order: little_endian
+  # Home page wallpaper: "Minimal Dark Blue Wave Abstract" centre-cropped to
+  # 16:10 and scaled to the 1280x800 screen (images/home_wallpaper.png).
+  - platform: file
+    file: ${images_base}home_wallpaper.png
+    id: img_home_wallpaper
+    resize: 1280x800
+    type: RGB565
+    byte_order: little_endian
   # Intercom card door-station photo, fitted to the 130x174 slot.
   - platform: file
     file: ${images_base}smart_intercom_panel.png
@@ -890,7 +891,7 @@ image:
     url: ${ha_base_url}/
     format: JPEG
     type: RGB565
-    resize: 320x240
+    resize: 320x196        # fits the 196 px tile: a square snapshot shows whole
     update_interval: never
     buffer_size: 65536
     on_download_finished:
@@ -909,7 +910,7 @@ image:
     url: ${ha_base_url}/
     format: JPEG
     type: RGB565
-    resize: 320x240
+    resize: 320x196
     update_interval: never
     buffer_size: 65536
     on_download_finished:
@@ -981,13 +982,15 @@ lvgl:
       border_width: 1
       radius: 12
       pad_all: 0
+    # Energy bar: green at the bottom through blue to purple at the top (a
+    # two-stop gradient; its midpoint is blue).
     - id: ebar
       width: 10
       height: 4
       radius: 2
       border_width: 0
-      bg_color: 0x5B91F5
-      bg_grad_color: 0x9A8BEB
+      bg_color: 0x8B5CF6        # top: purple
+      bg_grad_color: 0x34D399   # bottom: green
       bg_grad_dir: VER
     # One slat of the garage roller-door curtain
     - id: garage_slat
@@ -1008,14 +1011,17 @@ lvgl:
         type: grid
         # Row weights are in 1/60 of a base row: rows 1-5 (clock row) are 66 so
         # that row is half a base row taller; rows 6-11 (intercom row) are 55 so
-        # it is half a base row shorter. The other rows keep the base 60.
+        # it is half a base row shorter. Rows 12-16 (cameras and scenes) are 70
+        # so the camera tiles fit a whole square snapshot; row 17 shrinks to a
+        # small bottom margin to pay for it. Total stays 1080 (= 800 px).
         grid_rows: [FR(60), FR(66), FR(66), FR(66), FR(66), FR(66), FR(55), FR(55), FR(55),
-                    FR(55), FR(55), FR(55), FR(60), FR(60), FR(60), FR(60), FR(60), FR(60)]
+                    FR(55), FR(55), FR(55), FR(70), FR(70), FR(70), FR(70), FR(70), FR(10)]
         grid_columns: [FR(1), FR(1), FR(1), FR(1), FR(1), FR(1), FR(1),
                        FR(1), FR(1), FR(1), FR(1), FR(1), FR(1)]
         pad_row: 0
         pad_column: 0
       bg_color: 0x0B1018
+      bg_image_src: img_home_wallpaper
       pad_all: 0
       scrollable: false
       # Swipe up opens settings.
@@ -1026,15 +1032,16 @@ lvgl:
             time: 250ms
       widgets:
         # =====================================================================
-        # SOIL MOISTURE (top, left of the status)  col 5 span 3 | row 0
-        # Now | two days ago | yesterday (9-10 am average), between grey bars.
+        # SOIL MOISTURE (top, left of the status)  col 4 span 4 | row 0
+        # "Soil Humidity" | two days ago | yesterday (9-10 am average) | today,
+        # between grey bars.
         # =====================================================================
         - obj:
             styles: cell_style
             scrollable: false
-            grid_cell_column_pos: 5
+            grid_cell_column_pos: 4
             grid_cell_row_pos: 0
-            grid_cell_column_span: 3
+            grid_cell_column_span: 4
             grid_cell_row_span: 1
             grid_cell_x_align: STRETCH
             grid_cell_y_align: STRETCH
@@ -1053,8 +1060,7 @@ lvgl:
                   text_font: font_mdi_24
                   text_color: 0x47B7E9
               - label:
-                  id: soil_now_label
-                  text: "Now --%"
+                  text: "Soil Humidity"
                   text_font: font_small
                   text_color: 0xAAB8EE
               - label:
@@ -1065,6 +1071,11 @@ lvgl:
               - label:
                   id: soil_day2_label
                   text: "-- --%"
+                  text_font: font_small
+                  text_color: 0xAAB8EE
+              - label:
+                  id: soil_now_label
+                  text: "Today --%"
                   text_font: font_small
                   text_color: 0xAAB8EE
               - label:
@@ -1194,8 +1205,12 @@ lvgl:
                   height: 100%
                   scrollable: false
                   clip_corner: true
-                  bg_color: 0x18243A
-                  bg_grad_color: 0x34466A
+                  # The display is 16-bit (RGB565), so a gradient can only use
+                  # a few distinct shades. 0x18243A -> 0x34466A gave just 3-8
+                  # steps per channel (wide visible stripes); this wider range
+                  # gives 6-16 steps, so the bands are much finer.
+                  bg_color: 0x14203A
+                  bg_grad_color: 0x40609A
                   bg_grad_dir: VER
                   border_width: 0
                   widgets:
@@ -1650,6 +1665,27 @@ lvgl:
                         x: 48
                         y: 8
                         text: "Intercom"
+                    # Glow behind the dark door-station photo so it stands out
+                    # from the charcoal card: grey at the top to white at the
+                    # bottom, with a soft white halo.
+                    - obj:
+                        align: BOTTOM_LEFT
+                        x: 14
+                        y: -12
+                        width: 130
+                        height: 174
+                        radius: 14
+                        border_width: 0
+                        pad_all: 0
+                        scrollable: false
+                        clickable: false
+                        bg_color: 0x9CA3AF
+                        bg_grad_color: 0xF1F5F9
+                        bg_grad_dir: VER
+                        shadow_color: 0xFFFFFF
+                        shadow_width: 26
+                        shadow_spread: 2
+                        shadow_opa: 35%
                     - image:        # door-station photo, fitted to 130x174
                         src: img_intercom_panel
                         align: BOTTOM_LEFT
@@ -2437,9 +2473,9 @@ lvgl:
                     - obj:          # Front Door: last Frigate person snapshot
                         id: cam_front
                         x: 12
-                        y: 44
+                        y: 42
                         width: 320
-                        height: 150
+                        height: 196         # whole square snapshot (resize 320x196)
                         radius: 10
                         border_width: 0
                         pad_all: 0
@@ -2459,8 +2495,7 @@ lvgl:
                               align: CENTER
                               x: 15                       # centred in the area right of the label strip
                               clickable: false
-                          # Name strip on the left; text rotated 90° anticlockwise
-                          # (transform_rotation is clockwise, so 270), reading upwards.
+                          
                           - obj:
                               align: LEFT_MID
                               width: 30
@@ -2488,9 +2523,9 @@ lvgl:
                     - obj:          # Driveway: last Frigate person snapshot
                         id: cam_driveway
                         x: 345
-                        y: 44
+                        y: 42
                         width: 320
-                        height: 150
+                        height: 196
                         radius: 10
                         border_width: 0
                         pad_all: 0          # default padding left a grey band left/top
@@ -2645,7 +2680,7 @@ lvgl:
                           - label: {align: TOP_MID, y: 30, text: "\U000F011B", text_font: font_mdi_36, text_color: 0xB8C8F0}
                           - label: {align: BOTTOM_MID, y: -26, text: "Cat Away", text_font: font_small}
 
-        # ---- row 17: bottom half grid intentionally empty -------------------
+        # ---- row 17: small bottom margin (FR(10)), intentionally empty ------
 
     # ==================================================================
     # CAMERA PAGES: one live RTSP camera per screen, at the stream's own
@@ -2787,7 +2822,9 @@ lvgl:
     - id: settings_p4_page
       bg_color: 0x202020
       on_load:
+        - lvgl.widget.hide: reboot_confirm
         - script.execute: settings_sync_widgets
+        - script.execute: update_settings_info
       on_swipe_down:
         - script.execute: close_settings_page
       widgets:
@@ -2804,7 +2841,7 @@ lvgl:
             bg_color: 0x202020
             border_width: 0
             pad_top: 10
-            pad_bottom: 10
+            pad_bottom: 96             # keeps the list clear of the Reboot button
             pad_left: 20
             pad_right: 20
             scrollable: true
@@ -2843,6 +2880,8 @@ lvgl:
                   text_align: CENTER
                   text_color: 0x88AAFF
                   text_font: ${settings_label_font}
+              # Label on the left, slider centred in the row (no flex layout,
+              # so each child is placed by its own align).
               - obj:
                   width: ${settings_row_width}
                   height: ${settings_row_height}
@@ -2851,19 +2890,15 @@ lvgl:
                   pad_left: 12
                   pad_right: 12
                   scrollable: false
-                  layout:
-                    type: FLEX
-                    flex_flow: ROW
-                    flex_align_main: SPACE_BETWEEN
-                    flex_align_cross: CENTER
                   widgets:
                     - label:
-                        width: ${settings_mid_width}
+                        align: LEFT_MID
                         text: "Master volume"
                         text_align: LEFT
                         text_color: 0xFFFFFF
                         text_font: ${settings_label_font}
                     - slider:
+                        align: CENTER
                         width: ${settings_control_width}
                         id: ui_speaker_vol_slider
                         height: ${settings_slider_height}
@@ -2909,6 +2944,104 @@ lvgl:
 #                          - number.set:
 #                              id: mic_gain
 #                              value: !lambda 'return x;'
+              # ========================================================================
+              # SECTION: DISPLAY (brightness, dim timer, return-to-home timer)
+              # ========================================================================
+              - obj:
+                  width: ${settings_row_width}
+                  height: 2
+                  bg_color: 0x444444
+                  border_width: 0
+                  pad_all: 0
+              - label:
+                  width: ${settings_row_width}
+                  text: "Display"
+                  text_align: CENTER
+                  text_color: 0x88AAFF
+                  text_font: ${settings_label_font}
+              - obj:
+                  width: ${settings_row_width}
+                  height: ${settings_row_height}
+                  bg_opa: TRANSP
+                  border_width: 0
+                  pad_left: 12
+                  pad_right: 12
+                  scrollable: false
+                  widgets:
+                    - label:
+                        align: LEFT_MID
+                        text: "Screen brightness"
+                        text_color: 0xFFFFFF
+                        text_font: ${settings_label_font}
+                    - slider:
+                        id: ui_brightness_slider
+                        align: CENTER
+                        width: ${settings_control_width}
+                        height: ${settings_slider_height}
+                        adv_hittest: true
+                        gesture_bubble: true
+                        min_value: 10
+                        max_value: 100
+                        value: !lambda 'return id(screen_brightness).state;'
+                        on_release:
+                          - number.set:
+                              id: screen_brightness
+                              value: !lambda 'return x;'
+              - obj:
+                  width: ${settings_row_width}
+                  height: ${settings_row_height}
+                  bg_opa: TRANSP
+                  border_width: 0
+                  pad_left: 12
+                  pad_right: 12
+                  scrollable: false
+                  widgets:
+                    - label:
+                        align: LEFT_MID
+                        text: "Dim screen after"
+                        text_color: 0xFFFFFF
+                        text_font: ${settings_label_font}
+                    - dropdown:
+                        id: ui_dim_after_dd
+                        align: CENTER
+                        width: ${settings_dropdown_width}
+                        options:
+                          - "30 seconds"
+                          - "1 minute"
+                          - "2 minutes"
+                          - "5 minutes"
+                        on_value:
+                          - select.set_index:
+                              id: screen_dim_select
+                              index: !lambda 'return x;'
+              - obj:
+                  width: ${settings_row_width}
+                  height: ${settings_row_height}
+                  bg_opa: TRANSP
+                  border_width: 0
+                  pad_left: 12
+                  pad_right: 12
+                  scrollable: false
+                  widgets:
+                    - label:
+                        align: LEFT_MID
+                        text: "Return to home after"
+                        text_color: 0xFFFFFF
+                        text_font: ${settings_label_font}
+                    - dropdown:
+                        id: ui_home_return_dd
+                        align: CENTER
+                        width: ${settings_dropdown_width}
+                        options:
+                          - "Off"
+                          - "30 seconds"
+                          - "1 minute"
+                          - "2 minutes"
+                          - "5 minutes"
+                        on_value:
+                          - select.set_index:
+                              id: home_return_select
+                              index: !lambda 'return x;'
               # ========================================================================
               # SECTION: CALL AND MUTE
               # ========================================================================
@@ -3203,6 +3336,111 @@ lvgl:
             widgets:
               - label: {align: CENTER, text: "<  Home", text_font: font_body, text_color: 0xFFFFFF}
 
+        # Reboot (bottom centre). Opens reboot_confirm; nothing restarts until
+        # the second button is pressed.
+        - button:
+            id: settings_reboot_btn
+            align: BOTTOM_MID
+            y: -16
+            width: 240
+            height: 56
+            radius: 12
+            border_width: 0
+            shadow_width: 0
+            bg_color: 0xDC2626
+            on_click:
+              - lvgl.widget.show: reboot_confirm
+            widgets:
+              - label: {align: CENTER, text: "Reboot", text_font: font_body, text_color: 0xFFFFFF}
+
+        # Bottom right: why the panel last restarted, and uptime as HH:MM:SS.
+        # Filled by update_settings_info (on page load, then every second).
+        - label:
+            id: settings_reset_reason_label
+            align: BOTTOM_RIGHT
+            x: -24
+            y: -46
+            text: "Last restart: --"
+            text_font: font_small
+            text_color: 0xA7B2C4
+        - label:
+            id: settings_uptime_label
+            align: BOTTOM_RIGHT
+            x: -24
+            y: -22
+            text: "Uptime --:--:--"
+            text_font: font_small
+            text_color: 0xA7B2C4
+
+        # Reboot confirmation: dims the page and blocks taps behind it.
+        # Declared last so it sits on top of everything on this page.
+        - obj:
+            id: reboot_confirm
+            align: CENTER
+            width: 1280
+            height: 800
+            radius: 0
+            border_width: 0
+            bg_color: 0x000000
+            bg_opa: 70%
+            clickable: true
+            scrollable: false
+            hidden: true
+            widgets:
+              - obj:
+                  align: CENTER
+                  width: 520
+                  height: 240
+                  radius: 14
+                  bg_color: 0x151D2B
+                  border_color: 0x2A3546
+                  border_width: 1
+                  scrollable: false
+                  widgets:
+                    - label:
+                        align: TOP_MID
+                        y: 30
+                        text: "Reboot the panel?"
+                        text_font: font_ui_medium
+                        text_color: 0xFFFFFF
+                    - label:
+                        align: TOP_MID
+                        y: 72
+                        text: "Calls and audio stop until it restarts."
+                        text_font: font_small
+                        text_color: 0xA7B2C4
+                    - button:
+                        align: BOTTOM_LEFT
+                        x: 30
+                        y: -24
+                        width: 200
+                        height: 56
+                        radius: 12
+                        border_width: 0
+                        shadow_width: 0
+                        bg_color: 0x202B3B
+                        on_click:
+                          - lvgl.widget.hide: reboot_confirm
+                        widgets:
+                          - label: {align: CENTER, text: "Cancel", text_font: font_body, text_color: 0xFFFFFF}
+                    - button:
+                        align: BOTTOM_RIGHT
+                        x: -30
+                        y: -24
+                        width: 200
+                        height: 56
+                        radius: 12
+                        border_width: 0
+                        shadow_width: 0
+                        bg_color: 0xDC2626
+                        on_click:
+                          - logger.log:
+                              level: WARN
+                              format: "Reboot requested from the settings page"
+                          - lambda: App.safe_reboot();
+                        widgets:
+                          - label: {align: CENTER, text: "Reboot", text_font: font_body, text_color: 0xFFFFFF}
+
     # ==================================================================
     # VIDEO CALL: p4_video_renderer draws the remote picture directly into
     # call_video_surface (top 720 px); LVGL only owns the control strip.
@@ -3266,9 +3504,7 @@ lvgl:
                         text_font: font_ui_medium
 
 
-# =============================================================================
-# RUNTIME LOGIC AND ENTITIES
-# =============================================================================
+# =======RUNTIME LOGIC AND ENTITIES============================================
 
 globals:
   - id: peer_name
@@ -3552,7 +3788,7 @@ script:
             if (std::isnan(v))
               snprintf(text, sizeof(text), "%s --%%", day.c_str());
             else
-              snprintf(text, sizeof(text), "%s %.0f%%", day.c_str(), v);
+              snprintf(text, sizeof(text), "%s %.0f%%", day.c_str(), v * ${soil_moisture_scale});
             lv_label_set_text(labels[i], text);
           }
 
@@ -3863,6 +4099,15 @@ script:
           id: ui_auto_answer_sw
           state:
             checked: !lambda 'return id(auto_answer_switch).state;'
+      - lvgl.slider.update:
+          id: ui_brightness_slider
+          value: !lambda 'return id(screen_brightness).state;'
+      - lvgl.dropdown.update:
+          id: ui_dim_after_dd
+          selected_index: !lambda 'return id(screen_dim_select).active_index().value_or(1);'
+      - lvgl.dropdown.update:
+          id: ui_home_return_dd
+          selected_index: !lambda 'return id(home_return_select).active_index().value_or(2);'
 #      - lvgl.switch.update:
 #          id: ui_dnd_sw
 #          state:
@@ -3882,6 +4127,34 @@ script:
 #          id: ui_agc_sw
 #          state:
 #            checked: !lambda 'return id(agc_switch).state;'
+
+  # Settings page, bottom right: last reset reason and uptime (HH:MM:SS; the
+  # hours keep counting past 24). millis_64() does not wrap after 49 days.
+  - id: update_settings_info
+    then:
+      - lambda: |-
+          const char *reason;
+          switch (esp_reset_reason()) {
+            case ESP_RST_POWERON:   reason = "Power on"; break;
+            case ESP_RST_EXT:       reason = "Reset pin"; break;
+            case ESP_RST_SW:        reason = "Software restart"; break;
+            case ESP_RST_PANIC:     reason = "Crash (panic)"; break;
+            case ESP_RST_INT_WDT:   reason = "Interrupt watchdog"; break;
+            case ESP_RST_TASK_WDT:  reason = "Task watchdog"; break;
+            case ESP_RST_WDT:       reason = "Watchdog"; break;
+            case ESP_RST_DEEPSLEEP: reason = "Deep sleep wake"; break;
+            case ESP_RST_BROWNOUT:  reason = "Brownout (power dip)"; break;
+            case ESP_RST_SDIO:      reason = "SDIO reset"; break;
+            default:                reason = "Other"; break;
+          }
+          char text[48];
+          snprintf(text, sizeof(text), "Last restart: %s", reason);
+          lv_label_set_text(id(settings_reset_reason_label), text);
+
+          const uint64_t s = millis_64() / 1000;
+          snprintf(text, sizeof(text), "Uptime %02lu:%02u:%02u",
+                   (unsigned long) (s / 3600), (unsigned) (s / 60 % 60), (unsigned) (s % 60));
+          lv_label_set_text(id(settings_uptime_label), text);
 
   - id: update_ic_idle_labels
     then:
@@ -3948,21 +4221,50 @@ script:
           lv_label_set_text(id(garage_btn_icon), icon);
           lv_obj_set_style_bg_color(id(garage_btn), lv_color_hex(color), LV_PART_MAIN);
 
-  # Backlight: full on touch/activity, then dims after 1 and 3 minutes.
+  # Backlight: the chosen Screen Brightness on touch/activity, dimmed to 60 %
+  # of it after the "Dim screen after" time, then 20 % of it 2 minutes later.
   - id: backlight_timer
     mode: restart
     then:
       - output.set_level:
           id: backlight_pwm
-          level: 100%
-      - delay: 60s
+          level: !lambda 'return id(screen_brightness).state / 100.0f;'
+      - delay: !lambda |-
+          static const uint32_t DIM_MS[] = {30000, 60000, 120000, 300000};
+          const size_t i = id(screen_dim_select).active_index().value_or(1);
+          return DIM_MS[i < 4 ? i : 1];
       - output.set_level:
           id: backlight_pwm
-          level: 60%
+          level: !lambda 'return id(screen_brightness).state * 0.6f / 100.0f;'
       - delay: 120s
       - output.set_level:
           id: backlight_pwm
-          level: 20%
+          level: !lambda 'return std::max(0.05f, id(screen_brightness).state * 0.2f / 100.0f);'
+
+  # Return to the home page after the "Return to home after" time with no
+  # touch. Restarted by every touch; does nothing when set to Off or while a
+  # call is ringing or active (the call screens manage their own page).
+  - id: home_return_timer
+    mode: restart
+    then:
+      - if:
+          condition:
+            lambda: 'return id(home_return_select).active_index().value_or(2) > 0;'
+          then:
+            - delay: !lambda |-
+                static const uint32_t HOME_MS[] = {0, 30000, 60000, 120000, 300000};
+                const size_t i = id(home_return_select).active_index().value_or(2);
+                return HOME_MS[i < 5 ? i : 2];
+            - if:
+                condition:
+                  lambda: 'return id(phone).is_idle() && !id(home_page)->is_showing();'
+                then:
+                  - lvgl.widget.hide: reboot_confirm
+                  - lvgl.page.show:
+                      id: home_page
+                      animation: FADE_IN
+                      time: 250ms
+                  - script.execute: update_call_tile
 
 binary_sensor:
   - platform: gpio
@@ -4105,6 +4407,48 @@ switch:
             - delay: 50ms
       - speaker.mute_off: hw_speaker
 
+# Display settings, also shown in Home Assistant. All restore after a reboot;
+# the settings page dropdowns and slider set these.
+select:
+  - platform: template
+    id: screen_dim_select
+    name: Screen Dim After
+    icon: mdi:brightness-6
+    entity_category: config
+    options: ["30 seconds", "1 minute", "2 minutes", "5 minutes"]
+    initial_option: "1 minute"
+    optimistic: true
+    restore_value: true
+    on_value:
+      - script.execute: backlight_timer
+  - platform: template
+    id: home_return_select
+    name: Return To Home After
+    icon: mdi:home-clock
+    entity_category: config
+    options: ["Off", "30 seconds", "1 minute", "2 minutes", "5 minutes"]
+    initial_option: "1 minute"
+    optimistic: true
+    restore_value: true
+    on_value:
+      - script.execute: home_return_timer
+
+number:
+  - platform: template
+    id: screen_brightness
+    name: Screen Brightness
+    icon: mdi:brightness-percent
+    entity_category: config
+    unit_of_measurement: "%"
+    min_value: 10
+    max_value: 100
+    step: 5
+    initial_value: 100
+    optimistic: true
+    restore_value: true
+    on_value:
+      - script.execute: backlight_timer
+
 button:
   # Re-reads the 14-day energy history from HA (also runs on connect and at 00:05).
   - platform: template
@@ -4223,8 +4567,8 @@ sensor:
       - lvgl.label.update:
           id: soil_now_label
           text:
-            format: "Now %.0f%%"
-            args: ['x']
+            format: "Today %.0f%%"
+            args: ['x * ${soil_moisture_scale}']
 
 text_sensor:
   ##RTSP camera url.
@@ -4305,9 +4649,18 @@ text_sensor:
 
 interval:
   # Top-right Wi-Fi / C6 status
-  - interval: 10s
+  - interval: 120s
     then:
       - script.execute: update_status_bar
+
+  # Settings page uptime ticks every second, only while that page is shown.
+  - interval: 1s
+    then:
+      - if:
+          condition:
+            lambda: return id(settings_p4_page)->is_showing();
+          then:
+            - script.execute: update_settings_info
 
   # Home page clock card. The clock shows no seconds, so every 45 s is
   # enough (the minute flips up to 45 s late).
