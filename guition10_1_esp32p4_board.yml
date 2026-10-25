@@ -804,6 +804,9 @@ font:
       - "\U000F05AA"  # wifi-off
       - "\U000F061A"  # chip
       - "\U000F06E8"  # lightbulb-on (Lights card title)
+      - "\U000F0737"  # arrow-up-bold (garage button)
+      - "\U000F0666"  # stop-circle (garage button)
+      - "\U000F072E"  # arrow-down-bold (garage button)
 
   - file: "https://raw.githubusercontent.com/Templarian/MaterialDesign-Webfont/master/fonts/materialdesignicons-webfont.ttf"
     id: font_mdi_36
@@ -1362,10 +1365,10 @@ lvgl:
                         id: heater_power_btn
                         styles: round_btn
                         align: TOP_RIGHT
-                        x: -26
-                        y: 52
-                        width: 52
-                        height: 52
+                        x: -28                  # 48 px, same as the lock buttons;
+                        y: 54                   # centre kept where the 52 px button was
+                        width: 48
+                        height: 48
                         bg_color: 0x527FD6
                         on_click:
                           - homeassistant.action:
@@ -1376,7 +1379,7 @@ lvgl:
                           - label:
                               align: CENTER
                               text: "\U000F0425"
-                              text_font: font_mdi_36
+                              text_font: font_mdi_24
                               text_color: 0xFFFFFF
                     - obj:          # mode buttons row
                         align: BOTTOM_MID
@@ -1447,138 +1450,7 @@ lvgl:
                                 - label: {align: CENTER, text: "Fan", text_font: font_small}
 
         # =====================================================================
-        # 3. FRONT DOOR LOCK                 col 11 span 1 | row 1 span 5
-        # =====================================================================
-        - obj:
-            styles: cell_style
-            scrollable: false
-            grid_cell_column_pos: 11
-            grid_cell_row_pos: 1
-            grid_cell_column_span: 1
-            grid_cell_row_span: 5
-            grid_cell_x_align: STRETCH
-            grid_cell_y_align: STRETCH
-            widgets:
-              - obj:
-                  id: card_front_lock
-                  styles: card_style
-                  width: 100%
-                  height: 100%
-                  scrollable: false
-                  clip_corner: true
-                  widgets:
-                    # Background: lock photo at 75% of the card width centred.
-                    - image:
-                        src: img_smart_lock
-                        align: CENTER
-                        y: -10
-                    - label:
-                        align: TOP_MID
-                        y: 8
-                        text: "Front"
-                        text_font: font_small
-                        text_color: 0xFFFFFF
-                    - button:
-                        id: front_lock_btn
-                        styles: round_btn
-                        align: BOTTOM_MID
-                        y: -12
-                        width: 48
-                        height: 48
-                        bg_color: 0x713F46          # unlocked
-                        checked:
-                          bg_color: 0x276B57        # locked
-                        on_click:
-                          - if:
-                              condition:
-                                text_sensor.state:
-                                  id: front_lock_state
-                                  state: "locked"
-                              then:
-                                - homeassistant.action:
-                                    action: lock.unlock
-                                    data:
-                                      entity_id: ${front_lock_entity}
-                              else:
-                                - homeassistant.action:
-                                    action: lock.lock
-                                    data:
-                                      entity_id: ${front_lock_entity}
-                        widgets:
-                          - label:
-                              id: front_lock_icon        # locked / unlocked icon
-                              align: CENTER
-                              text: "\U000F033E"
-                              text_font: font_mdi_24
-                              text_color: 0xFFFFFF
-
-        # =====================================================================
-        # 3b. GARAGE DOOR LOCK               col 12 span 1 | row 1 span 5
-        # =====================================================================
-        - obj:
-            styles: cell_style
-            scrollable: false
-            grid_cell_column_pos: 12
-            grid_cell_row_pos: 1
-            grid_cell_column_span: 1
-            grid_cell_row_span: 5
-            grid_cell_x_align: STRETCH
-            grid_cell_y_align: STRETCH
-            widgets:
-              - obj:
-                  id: card_garage_lock
-                  styles: card_style
-                  width: 100%
-                  height: 100%
-                  scrollable: false
-                  clip_corner: true
-                  widgets:
-                    - image:
-                        src: img_smart_lock
-                        align: CENTER
-                        y: -10
-                    - label:
-                        align: TOP_MID
-                        y: 8
-                        text: "Garage"
-                        text_font: font_small
-                        text_color: 0xFFFFFF
-                    - button:
-                        id: garage_lock_btn
-                        styles: round_btn
-                        align: BOTTOM_MID
-                        y: -12
-                        width: 48
-                        height: 48
-                        bg_color: 0x713F46          # unlocked
-                        checked:
-                          bg_color: 0x276B57        # locked
-                        on_click:
-                          - if:
-                              condition:
-                                text_sensor.state:
-                                  id: garage_lock_state
-                                  state: "locked"
-                              then:
-                                - homeassistant.action:
-                                    action: lock.unlock
-                                    data:
-                                      entity_id: ${garage_lock_entity}
-                              else:
-                                - homeassistant.action:
-                                    action: lock.lock
-                                    data:
-                                      entity_id: ${garage_lock_entity}
-                        widgets:
-                          - label:
-                              id: garage_lock_icon       # locked / unlocked icon
-                              align: CENTER
-                              text: "\U000F033E"
-                              text_font: font_mdi_24
-                              text_color: 0xFFFFFF
-
-        # =====================================================================
-        # 4. GARAGE Roller DOOR                     col 9 span 2 | row 1 span 5
+        # 3. GARAGE Roller DOOR                     col 9 span 2 | row 1 span 5
         # =====================================================================
         - obj:
             styles: cell_style
@@ -1679,9 +1551,9 @@ lvgl:
                         styles: round_btn
                         align: BOTTOM_RIGHT
                         x: -12
-                        y: -5
-                        width: 56
-                        height: 56
+                        y: -12                  # same size and bottom offset as the lock
+                        width: 48               # buttons, so all three sit on one line
+                        height: 48
                         bg_color: 0x527FD6
                         on_click:
                           - homeassistant.action:
@@ -1696,8 +1568,140 @@ lvgl:
                               id: garage_btn_icon
                               align: CENTER
                               text: "\U000F0737"
-                              text_font: font_mdi_36
+                              text_font: font_mdi_24
                               text_color: 0xFFFFFF
+        # =====================================================================
+        # 4. FRONT DOOR LOCK                 col 11 span 1 | row 1 span 5
+        # =====================================================================
+        - obj:
+            styles: cell_style
+            scrollable: false
+            grid_cell_column_pos: 11
+            grid_cell_row_pos: 1
+            grid_cell_column_span: 1
+            grid_cell_row_span: 5
+            grid_cell_x_align: STRETCH
+            grid_cell_y_align: STRETCH
+            widgets:
+              - obj:
+                  id: card_front_lock
+                  styles: card_style
+                  width: 100%
+                  height: 100%
+                  scrollable: false
+                  clip_corner: true
+                  widgets:
+                    # Background: lock photo at 75% of the card width centred.
+                    - image:
+                        src: img_smart_lock
+                        align: CENTER
+                        y: -10
+                    - label:
+                        align: TOP_MID
+                        y: 8
+                        text: "Front"
+                        text_font: font_small
+                        text_color: 0xFFFFFF
+                    - button:
+                        id: front_lock_btn
+                        styles: round_btn
+                        align: BOTTOM_MID
+                        y: -12
+                        width: 48
+                        height: 48
+                        bg_color: 0x713F46          # unlocked
+                        checked:
+                          bg_color: 0x276B57        # locked
+                        on_click:
+                          - if:
+                              condition:
+                                text_sensor.state:
+                                  id: front_lock_state
+                                  state: "locked"
+                              then:
+                                - homeassistant.action:
+                                    action: lock.unlock
+                                    data:
+                                      entity_id: ${front_lock_entity}
+                              else:
+                                - homeassistant.action:
+                                    action: lock.lock
+                                    data:
+                                      entity_id: ${front_lock_entity}
+                        widgets:
+                          - label:
+                              id: front_lock_icon        # locked / unlocked icon
+                              align: CENTER
+                              text: "\U000F033E"
+                              text_font: font_mdi_24
+                              text_color: 0xFFFFFF
+
+        # =====================================================================
+        # 4b. GARAGE DOOR LOCK               col 12 span 1 | row 1 span 5
+        # =====================================================================
+        - obj:
+            styles: cell_style
+            scrollable: false
+            grid_cell_column_pos: 12
+            grid_cell_row_pos: 1
+            grid_cell_column_span: 1
+            grid_cell_row_span: 5
+            grid_cell_x_align: STRETCH
+            grid_cell_y_align: STRETCH
+            widgets:
+              - obj:
+                  id: card_garage_lock
+                  styles: card_style
+                  width: 100%
+                  height: 100%
+                  scrollable: false
+                  clip_corner: true
+                  widgets:
+                    - image:
+                        src: img_smart_lock
+                        align: CENTER
+                        y: -10
+                    - label:
+                        align: TOP_MID
+                        y: 8
+                        text: "Garage"
+                        text_font: font_small
+                        text_color: 0xFFFFFF
+                    - button:
+                        id: garage_lock_btn
+                        styles: round_btn
+                        align: BOTTOM_MID
+                        y: -12
+                        width: 48
+                        height: 48
+                        bg_color: 0x713F46          # unlocked
+                        checked:
+                          bg_color: 0x276B57        # locked
+                        on_click:
+                          - if:
+                              condition:
+                                text_sensor.state:
+                                  id: garage_lock_state
+                                  state: "locked"
+                              then:
+                                - homeassistant.action:
+                                    action: lock.unlock
+                                    data:
+                                      entity_id: ${garage_lock_entity}
+                              else:
+                                - homeassistant.action:
+                                    action: lock.lock
+                                    data:
+                                      entity_id: ${garage_lock_entity}
+                        widgets:
+                          - label:
+                              id: garage_lock_icon       # locked / unlocked icon
+                              align: CENTER
+                              text: "\U000F033E"
+                              text_font: font_mdi_24
+                              text_color: 0xFFFFFF
+
+        
 
         # =====================================================================
         # 5. INTERCOM                        col 1 span 4 | row 6 span 6
