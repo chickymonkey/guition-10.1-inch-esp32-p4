@@ -120,6 +120,12 @@ substitutions:
   ha_base_url: "http://homeassistant.local:8123"
   snapshot_front_entity: image.porchdahuafrigate_person
   snapshot_driveway_entity: image.garagecamera_person
+  # Camera pages: Frigate "last car / last cat" snapshots, shown with the
+  # person snapshot (above) in a column beside each live stream.
+  snapshot_front_car_entity: image.porchdahuafrigate_car
+  snapshot_front_cat_entity: image.porchdahuafrigate_cat
+  snapshot_driveway_car_entity: image.garagecamera_car
+  snapshot_driveway_cat_entity: image.garagecamera_cat
 
 # Shared packages: P4 base/hosted Wi-Fi, VoIP transport and settings, JPEG
 # video path, audio controls and the ringtone playback components.
@@ -910,6 +916,69 @@ image:
       - logger.log:
           level: WARN
           format: "Driveway snapshot download failed"
+  # Camera pages: person / car / cat snapshots beside each live stream, fitted
+  # to the 256x184 tiles. Downloaded when the page opens (fetch_*_cam_snaps)
+  # and on each new detection while the page is shown.
+  - platform: online_image
+    id: cam_front_person_img
+    url: ${ha_base_url}/
+    format: JPEG
+    type: RGB565
+    resize: 256x184
+    update_interval: never
+    buffer_size: 65536
+    on_download_finished:
+      - lvgl.image.update: {id: cam_front_person_snap, src: cam_front_person_img}
+  - platform: online_image
+    id: cam_front_car_img
+    url: ${ha_base_url}/
+    format: JPEG
+    type: RGB565
+    resize: 256x184
+    update_interval: never
+    buffer_size: 65536
+    on_download_finished:
+      - lvgl.image.update: {id: cam_front_car_snap, src: cam_front_car_img}
+  - platform: online_image
+    id: cam_front_cat_img
+    url: ${ha_base_url}/
+    format: JPEG
+    type: RGB565
+    resize: 256x184
+    update_interval: never
+    buffer_size: 65536
+    on_download_finished:
+      - lvgl.image.update: {id: cam_front_cat_snap, src: cam_front_cat_img}
+  - platform: online_image
+    id: cam_drive_person_img
+    url: ${ha_base_url}/
+    format: JPEG
+    type: RGB565
+    resize: 256x184
+    update_interval: never
+    buffer_size: 65536
+    on_download_finished:
+      - lvgl.image.update: {id: cam_drive_person_snap, src: cam_drive_person_img}
+  - platform: online_image
+    id: cam_drive_car_img
+    url: ${ha_base_url}/
+    format: JPEG
+    type: RGB565
+    resize: 256x184
+    update_interval: never
+    buffer_size: 65536
+    on_download_finished:
+      - lvgl.image.update: {id: cam_drive_car_snap, src: cam_drive_car_img}
+  - platform: online_image
+    id: cam_drive_cat_img
+    url: ${ha_base_url}/
+    format: JPEG
+    type: RGB565
+    resize: 256x184
+    update_interval: never
+    buffer_size: 65536
+    on_download_finished:
+      - lvgl.image.update: {id: cam_drive_cat_snap, src: cam_drive_cat_img}
 
 
 lvgl:
@@ -2720,7 +2789,7 @@ lvgl:
                               clickable: false
                           - label:
                               align: BOTTOM_MID
-                              y: -1
+                              y: -41
                               width: 76
                               text: "TV Lamp"
                               text_align: CENTER
@@ -2805,9 +2874,11 @@ lvgl:
     # right switches camera; "< Home" or swiping right past Front Door
     # returns. Each stream only runs while its page is shown.
     # ==================================================================
-    - id: cam_front_page
+    - id: cam_front_page #Front Door camera
       bg_color: 0x0B1018
       scrollable: false
+      on_load:
+        - script.execute: fetch_front_cam_snaps
       on_swipe_left:
         - lvgl.page.show:
             id: cam_driveway_page
@@ -2855,6 +2926,7 @@ lvgl:
               - label: {align: CENTER, text: "Driveway  >", text_font: font_body, text_color: 0xFFFFFF}
         - obj:              # Front door camera: 640x480 stream
             align: CENTER
+            x: -120             # 120 px left of centre, making room for the snapshots
             y: 38
             width: 704
             height: 576
@@ -2870,10 +2942,134 @@ lvgl:
                   y: 0
                   width: 704
                   height: 576
+        # Last Frigate snapshots, right of the stream (stream x 168-872,
+        # y 150-726): three tiles, 12 px apart, matching its height. Each
+        # tile is styled like the home page camera tiles: a 20 px name strip
+        # on the left (name rotated 90 degrees anticlockwise), a 5 px gap and
+        # the 256x184 snapshot.
+        - obj:              # Person
+            x: 888
+            y: 150
+            width: 210             # 20 px name strip + 6 px gap + 184 px snapshot
+            height: 184
+            radius: 10
+            border_width: 0
+            pad_all: 0
+            clip_corner: true
+            scrollable: false
+            clickable: false
+            bg_color: 0x000000
+            widgets:
+              - label: {align: CENTER, x: 12, text: "No snapshot", text_font: font_small, text_color: 0x5A6577}
+              - image: {id: cam_front_person_snap, src: cam_front_person_img, align: RIGHT_MID, clickable: false}
+              - obj:              # name strip, as on the home page camera tiles
+                  align: LEFT_MID
+                  width: 20
+                  height: 100%
+                  radius: 0
+                  border_width: 0
+                  pad_all: 0
+                  bg_color: 0x111A28
+                  bg_opa: 85%
+                  clickable: false
+                  scrollable: false
+                  widgets:
+                    - obj: {align: BOTTOM_MID, y: -8, width: 9, height: 9, radius: 5, border_width: 0, bg_color: 0x63C9A0, clickable: false}
+                    - label:
+                        align: CENTER
+                        width: 100
+                        height: 20
+                        text: "Person"
+                        text_align: CENTER
+                        text_font: font_small
+                        text_color: 0xFFFFFF
+                        transform_rotation: 270
+                        transform_pivot_x: 50
+                        transform_pivot_y: 10
+        - obj:              # Car
+            x: 888
+            y: 346
+            width: 210              # 20 px name strip + 6 px gap + 184 px snapshot
+            height: 184
+            radius: 10
+            border_width: 0
+            pad_all: 0
+            clip_corner: true
+            scrollable: false
+            clickable: false
+            bg_color: 0x000000
+            widgets:
+              - label: {align: CENTER, x: 12, text: "No snapshot", text_font: font_small, text_color: 0x5A6577}
+              - image: {id: cam_front_car_snap, src: cam_front_car_img, align: RIGHT_MID, clickable: false}
+              - obj:              # name strip, as on the home page camera tiles
+                  align: LEFT_MID
+                  width: 20
+                  height: 100%
+                  radius: 0
+                  border_width: 0
+                  pad_all: 0
+                  bg_color: 0x111A28
+                  bg_opa: 85%
+                  clickable: false
+                  scrollable: false
+                  widgets:
+                    - obj: {align: BOTTOM_MID, y: -8, width: 9, height: 9, radius: 5, border_width: 0, bg_color: 0x63C9A0, clickable: false}
+                    - label:
+                        align: CENTER
+                        width: 100
+                        height: 20
+                        text: "Car"
+                        text_align: CENTER
+                        text_font: font_small
+                        text_color: 0xFFFFFF
+                        transform_rotation: 270
+                        transform_pivot_x: 50
+                        transform_pivot_y: 10
+        - obj:              # Cat
+            x: 888
+            y: 542
+            width: 210              # 20 px name strip + 6 px gap + 184 px snapshot
+            height: 184
+            radius: 10
+            border_width: 0
+            pad_all: 0
+            clip_corner: true
+            scrollable: false
+            clickable: false
+            bg_color: 0x000000
+            widgets:
+              - label: {align: CENTER, x: 12, text: "No snapshot", text_font: font_small, text_color: 0x5A6577}
+              - image: {id: cam_front_cat_snap, src: cam_front_cat_img, align: RIGHT_MID, clickable: false}
+              - obj:              # name strip, as on the home page camera tiles
+                  align: LEFT_MID
+                  width: 20
+                  height: 100%
+                  radius: 0
+                  border_width: 0
+                  pad_all: 0
+                  bg_color: 0x111A28
+                  bg_opa: 85%
+                  clickable: false
+                  scrollable: false
+                  widgets:
+                    - obj: {align: BOTTOM_MID, y: -8, width: 9, height: 9, radius: 5, border_width: 0, bg_color: 0x63C9A0, clickable: false}
+                    - label:
+                        align: CENTER
+                        width: 100
+                        height: 20
+                        text: "Cat"
+                        text_align: CENTER
+                        text_font: font_small
+                        text_color: 0xFFFFFF
+                        transform_rotation: 270
+                        transform_pivot_x: 50
+                        transform_pivot_y: 10
 
-    - id: cam_driveway_page
+    - id: cam_driveway_page #Driveway camera
       bg_color: 0x0B1018
       scrollable: false
+      on_load:
+        - script.execute: fetch_driveway_cam_snaps
       on_swipe_right:
         - lvgl.page.show:
             id: cam_front_page
@@ -2916,6 +3112,7 @@ lvgl:
               - label: {align: CENTER, text: "<  Front Door", text_font: font_body, text_color: 0xFFFFFF}
         - obj:              # Driveway camera: 704x576 stream
             align: CENTER
+            x: -120
             y: 38
             width: 704
             height: 576
@@ -2931,6 +3128,124 @@ lvgl:
                   y: 0
                   width: 704
                   height: 576
+        # Last Frigate snapshots, right of the stream (as on the Front Door page).
+        - obj:              # Person
+            x: 888
+            y: 150
+            width: 210              # 20 px name strip + 184 px snapshot
+            height: 184
+            radius: 10
+            border_width: 0
+            pad_all: 0
+            clip_corner: true
+            scrollable: false
+            clickable: false
+            bg_color: 0x000000
+            widgets:
+              - label: {align: CENTER, x: 12, text: "No snapshot", text_font: font_small, text_color: 0x5A6577}
+              - image: {id: cam_drive_person_snap, src: cam_drive_person_img, align: RIGHT_MID, clickable: false}
+              - obj:              # name strip, as on the home page camera tiles
+                  align: LEFT_MID
+                  width: 20
+                  height: 100%
+                  radius: 0
+                  border_width: 0
+                  pad_all: 0
+                  bg_color: 0x111A28
+                  bg_opa: 85%
+                  clickable: false
+                  scrollable: false
+                  widgets:
+                    - obj: {align: BOTTOM_MID, y: -8, width: 9, height: 9, radius: 5, border_width: 0, bg_color: 0x63C9A0, clickable: false}
+                    - label:
+                        align: CENTER
+                        width: 100
+                        height: 20
+                        text: "Person"
+                        text_align: CENTER
+                        text_font: font_small
+                        text_color: 0xFFFFFF
+                        transform_rotation: 270
+                        transform_pivot_x: 50
+                        transform_pivot_y: 10
+        - obj:              # Car
+            x: 888
+            y: 346
+            width: 210              # 20 px name strip 184 px snapshot
+            height: 184
+            radius: 10
+            border_width: 0
+            pad_all: 0
+            clip_corner: true
+            scrollable: false
+            clickable: false
+            bg_color: 0x000000
+            widgets:
+              - label: {align: CENTER, x: 12, text: "No snapshot", text_font: font_small, text_color: 0x5A6577}
+              - image: {id: cam_drive_car_snap, src: cam_drive_car_img, align: RIGHT_MID, clickable: false}
+              - obj:              # name strip, as on the home page camera tiles
+                  align: LEFT_MID
+                  width: 20
+                  height: 100%
+                  radius: 0
+                  border_width: 0
+                  pad_all: 0
+                  bg_color: 0x111A28
+                  bg_opa: 85%
+                  clickable: false
+                  scrollable: false
+                  widgets:
+                    - obj: {align: BOTTOM_MID, y: -8, width: 9, height: 9, radius: 5, border_width: 0, bg_color: 0x63C9A0, clickable: false}
+                    - label:
+                        align: CENTER
+                        width: 100
+                        height: 20
+                        text: "Car"
+                        text_align: CENTER
+                        text_font: font_small
+                        text_color: 0xFFFFFF
+                        transform_rotation: 270
+                        transform_pivot_x: 50
+                        transform_pivot_y: 10
+        - obj:              # Cat
+            x: 888
+            y: 542
+            width: 210              # 20 px name strip + 6 px gap + 256 px snapshot
+            height: 184
+            radius: 10
+            border_width: 0
+            pad_all: 0
+            clip_corner: true
+            scrollable: false
+            clickable: false
+            bg_color: 0x000000
+            widgets:
+              - label: {align: CENTER, x: 12, text: "No snapshot", text_font: font_small, text_color: 0x5A6577}
+              - image: {id: cam_drive_cat_snap, src: cam_drive_cat_img, align: RIGHT_MID, clickable: false}
+              - obj:              # name strip, as on the home page camera tiles
+                  align: LEFT_MID
+                  width: 20
+                  height: 100%
+                  radius: 0
+                  border_width: 0
+                  pad_all: 0
+                  bg_color: 0x111A28
+                  bg_opa: 85%
+                  clickable: false
+                  scrollable: false
+                  widgets:
+                    - obj: {align: BOTTOM_MID, y: -8, width: 9, height: 9, radius: 5, border_width: 0, bg_color: 0x63C9A0, clickable: false}
+                    - label:
+                        align: CENTER
+                        width: 100
+                        height: 20
+                        text: "Cat"
+                        text_align: CENTER
+                        text_font: font_small
+                        text_color: 0xFFFFFF
+                        transform_rotation: 270
+                        transform_pivot_x: 50
+                        transform_pivot_y: 10
     # ==================================================================
     # SETTINGS: one scrollable landscape page. Opened from the sidebar or a
     # swipe up on the home page; swipe down returns to the home page.
@@ -3709,6 +4024,64 @@ script:
             - online_image.set_url:
                 id: snap_driveway_img
                 url: !lambda 'return std::string("${ha_base_url}") + id(snap_driveway_picture).state;'
+
+  # Camera pages: download the person / car / cat snapshots for the column
+  # beside the stream (on page load, and on a new detection while shown).
+  # One at a time, 500 ms apart, so they don't all hit HA and PSRAM at once.
+  - id: fetch_front_cam_snaps
+    mode: restart
+    then:
+      - delay: 300ms
+      - if:
+          condition:
+            lambda: return id(snap_front_picture).state.rfind("/api/", 0) == 0;
+          then:
+            - online_image.set_url:
+                id: cam_front_person_img
+                url: !lambda 'return std::string("${ha_base_url}") + id(snap_front_picture).state;'
+      - delay: 500ms
+      - if:
+          condition:
+            lambda: return id(cam_front_car_picture).state.rfind("/api/", 0) == 0;
+          then:
+            - online_image.set_url:
+                id: cam_front_car_img
+                url: !lambda 'return std::string("${ha_base_url}") + id(cam_front_car_picture).state;'
+      - delay: 500ms
+      - if:
+          condition:
+            lambda: return id(cam_front_cat_picture).state.rfind("/api/", 0) == 0;
+          then:
+            - online_image.set_url:
+                id: cam_front_cat_img
+                url: !lambda 'return std::string("${ha_base_url}") + id(cam_front_cat_picture).state;'
+  - id: fetch_driveway_cam_snaps
+    mode: restart
+    then:
+      - delay: 300ms
+      - if:
+          condition:
+            lambda: return id(snap_driveway_picture).state.rfind("/api/", 0) == 0;
+          then:
+            - online_image.set_url:
+                id: cam_drive_person_img
+                url: !lambda 'return std::string("${ha_base_url}") + id(snap_driveway_picture).state;'
+      - delay: 500ms
+      - if:
+          condition:
+            lambda: return id(cam_drive_car_picture).state.rfind("/api/", 0) == 0;
+          then:
+            - online_image.set_url:
+                id: cam_drive_car_img
+                url: !lambda 'return std::string("${ha_base_url}") + id(cam_drive_car_picture).state;'
+      - delay: 500ms
+      - if:
+          condition:
+            lambda: return id(cam_drive_cat_picture).state.rfind("/api/", 0) == 0;
+          then:
+            - online_image.set_url:
+                id: cam_drive_cat_img
+                url: !lambda 'return std::string("${ha_base_url}") + id(cam_drive_cat_picture).state;'
 
   # Top-right status: Wi-Fi strength and the ESP32-C6 co-processor (its
   # firmware version, amber when an update is available). Wi-Fi runs through
@@ -4838,6 +5211,11 @@ text_sensor:
     internal: true
     on_value:
       - script.execute: fetch_front_snapshot
+      - if:
+          condition:
+            lambda: return id(cam_front_page)->is_showing();
+          then:
+            - script.execute: fetch_front_cam_snaps
   - platform: homeassistant
     id: snap_driveway_picture
     entity_id: ${snapshot_driveway_entity}
@@ -4855,6 +5233,76 @@ text_sensor:
     internal: true
     on_value:
       - script.execute: fetch_driveway_snapshot
+      - if:
+          condition:
+            lambda: return id(cam_driveway_page)->is_showing();
+          then:
+            - script.execute: fetch_driveway_cam_snaps
+
+  # Camera pages: car / cat snapshots (the person ones are above). The
+  # *_picture sensors hold the tokenised image-proxy path; a change of the
+  # entity state means a new detection, which refreshes the column if its
+  # page is on screen.
+  - platform: homeassistant
+    id: cam_front_car_picture
+    entity_id: ${snapshot_front_car_entity}
+    attribute: entity_picture
+    internal: true
+  - platform: homeassistant
+    id: cam_front_car_state
+    entity_id: ${snapshot_front_car_entity}
+    internal: true
+    on_value:
+      - if:
+          condition:
+            lambda: return id(cam_front_page)->is_showing();
+          then:
+            - script.execute: fetch_front_cam_snaps
+  - platform: homeassistant
+    id: cam_front_cat_picture
+    entity_id: ${snapshot_front_cat_entity}
+    attribute: entity_picture
+    internal: true
+  - platform: homeassistant
+    id: cam_front_cat_state
+    entity_id: ${snapshot_front_cat_entity}
+    internal: true
+    on_value:
+      - if:
+          condition:
+            lambda: return id(cam_front_page)->is_showing();
+          then:
+            - script.execute: fetch_front_cam_snaps
+  - platform: homeassistant
+    id: cam_drive_car_picture
+    entity_id: ${snapshot_driveway_car_entity}
+    attribute: entity_picture
+    internal: true
+  - platform: homeassistant
+    id: cam_drive_car_state
+    entity_id: ${snapshot_driveway_car_entity}
+    internal: true
+    on_value:
+      - if:
+          condition:
+            lambda: return id(cam_driveway_page)->is_showing();
+          then:
+            - script.execute: fetch_driveway_cam_snaps
+  - platform: homeassistant
+    id: cam_drive_cat_picture
+    entity_id: ${snapshot_driveway_cat_entity}
+    attribute: entity_picture
+    internal: true
+  - platform: homeassistant
+    id: cam_drive_cat_state
+    entity_id: ${snapshot_driveway_cat_entity}
+    internal: true
+    on_value:
+      - if:
+          condition:
+            lambda: return id(cam_driveway_page)->is_showing();
+          then:
+            - script.execute: fetch_driveway_cam_snaps
 
   - platform: homeassistant
     id: front_lock_state
