@@ -1,44 +1,6 @@
 # =============================================================================
 # Guition JC8012P4A1C_I_W_Y1 (ESP32-P4 10.1" sku:10153002-v3 [2635]): SIP JPEG videophone + HA dashboard
-# Profile: VoIP only / single-mic AEC / P4 landscape
-#
-# Based on n-IA-hane/esphome-intercom
-#   yamls/voip-only/single-bus/waveshare-p4-touch-videophone-jpeg.yaml
-# (no Voice Assistant, wake word, Sendspin, HTTP media or runtime controller)
-# plus the Guition hardware from guition-p4-101.yaml and the LVGL home-page
-# dashboard from lvgl_home_page.yml. voip_stack callbacks drive the UI
-# directly. Board-specific changes are marked [GUITION].
-# =============================================================================
-#
-# CAPTURE: ES8311 stereo RX; one microphone and the ES8311 internal DAC reference.
-#   [ES8311 RX left: MIC1] + [ES8311 RX right: DAC feedback REF]
-#     -> audio_stack 48 -> 16 kHz -> aec_processor (esp_aec, AEC only)
-#     -> mic_aec -> VoIP TX
-#
-# PLAYBACK:
-#   [HA media] ----------> speaker_player -> media_speaker_input --------+
-#   [HA TTS, ringtone] --> speaker_player -> announcement_speaker_input -+
-#   [VoIP RX] -----------------------------> voip_speaker_input ---------+
-#                       (resamplers) -> audio_mixer 48 kHz mono -> hw_speaker
-#                                     -> ES8311 -> NS4150 amp -> speaker
-#   The NS4150 amp (PA_CTRL) is only on while audio plays; esp_audio_stack
-#   on_amplifier_required / on_amplifier_idle switch it.
-#
-# Hardware [GUITION JC8012P4A1C_I_W_Y1]:
-#   - ESP32-P4 (16MB flash, 32MB hex PSRAM), ESP32-C6 Wi-Fi over SDIO
-#   - 10.1" 800x1280 MIPI-DSI (JD9365), landscape UI; GSL3680 touch (0x40)
-#   - ES8311 codec (0x18), NS4150 amp (PA_CTRL GPIO20)
-#   - OV02C10 2MP MIPI-CSI camera (0x36), RX8025T RTC (0x32)
-#   - BOOT button GPIO35
-#
-# Touch UI:
-#   Home page:     HA dashboard, Intercom card (VoIP), Frigate snapshots
-#   Camera pages:  live RTSP, one camera per page (sidebar or tap a snapshot)
-#   Settings page: sidebar Settings or swipe up; swipe down to return
-#   Video call:    full-width remote video with a hang-up strip
-#   BOOT button:   short press answers / calls / hangs up, long press mic mute
-
-# =======PROJECT SETUP=========================================================
+# 
 
 substitutions:
   name: guition-p4-101
@@ -52,7 +14,7 @@ substitutions:
 
   # [GUITION] ES8311 ADC PGA sets hardware gain; this is the post-AEC user trim.
   mic_gain_min: "-20"
-  mic_gain_max: "30"
+  mic_gain_max: "20"
 
   # Settings page widths for the 1280x800 landscape display.
   settings_row_width: "1180"
@@ -111,6 +73,7 @@ substitutions:
   display_backlight_pin: GPIO23   # [GUITION] LCD_PWM -> MP3202 EN
   speaker_enable_pin: GPIO20      # [GUITION] PA_CTRL -> NS4150 CTRL (high = on, per vendor BSP)
   boot_button_pin: GPIO35         # [GUITION] SW3 BOOTMODE, 10K pull-up
+  cooler_relay_pin: GPIO37        # [GUITION] CN2 pin 2 (UART0 TX) -> evaporative cooler relay S/IN
 
   # ---------------------------------------------------------------------------
   # Home Assistant entities shown on the home page
@@ -436,7 +399,9 @@ output:
     id: backlight_pwm
     pin: ${display_backlight_pin}
     inverted: false       # [GUITION] LCD_PWM high = MP3202 enabled
-    frequency: 1000Hz
+    # Above the audible range: at 1 kHz the backlight boost coil whined
+    # (audible hum whenever the brightness was below 100 %).
+    frequency: 25000Hz
 
   - platform: gpio
     id: speaker_enable
@@ -2751,11 +2716,11 @@ lvgl:
                           - image:
                               src: img_floor_lamp
                               align: CENTER       # exactly the tile size
-                              y: -12
+                              y: 3
                               clickable: false
                           - label:
                               align: BOTTOM_MID
-                              y: 15
+                              y: -1
                               width: 76
                               text: "TV Lamp"
                               text_align: CENTER
@@ -3011,20 +2976,14 @@ lvgl:
               # ------------------------------------------------------------------
               - label:
                   width: ${settings_row_width}
-                  text: "Living Room Controls"
+                  text: "Settings"
                   text_align: CENTER
                   text_color: 0xFFFFFF
                   text_font: ${settings_label_font}
 
               # ==================================================================
-              # SECTION: AUDIO
+              # SECTION: AUDIO (no divider line under the page title)
               # ==================================================================
-              - obj:
-                  width: ${settings_row_width}
-                  height: 2
-                  bg_color: 0x444444
-                  border_width: 0
-                  pad_all: 0
               - label:
                   width: ${settings_row_width}
                   text: "Audio"
@@ -4415,6 +4374,15 @@ script:
                 id: light_living_right_icon
                 text_color: 0x8995A7
 
+  # Evaporative cooler: one 250 ms press of its power button through the
+  # GPIO37 relay (same pattern as the garage door's press_button script).
+  - id: cooler_press
+    mode: restart
+    then:
+      - switch.turn_on: cooler_relay
+      - delay: 250ms
+      - switch.turn_off: cooler_relay
+
   - id: heater_update_buttons
     then:
       - lvgl.widget.update:
@@ -4586,6 +4554,20 @@ switch:
       icon: mdi:ear-hearing
       restore_mode: RESTORE_DEFAULT_ON
 
+  # Evaporative cooler relay on CN2 pin 2 (GPIO37), wired across the cooler
+  # controller's power button (COM + NO). Pressed by the cooler_press script
+  # ("Evaporative Cooler Power" button), as in the garage door controller.
+  # inverted: for an active-low relay module, which stays off while UART0 TX
+  # idles high during boot. Remove it only for a high-level-trigger module.
+  - platform: gpio
+    id: cooler_relay
+    name: Evaporative Cooler Relay
+    icon: mdi:air-conditioner
+    pin:
+      number: ${cooler_relay_pin}
+      inverted: true
+    restore_mode: ALWAYS_OFF
+
   # VoIP camera (OV02C10): send video on calls. Can be set at any time; while
   # idle it is the choice for the next call, during a call it adds or drops
   # the outgoing video. The sensor itself only captures while a call with
@@ -4695,6 +4677,14 @@ number:
       - script.execute: backlight_timer
 
 button:
+  # One press of the evaporative cooler's power button (toggles it on/off).
+  - platform: template
+    name: Evaporative Cooler Power
+    id: btn_cooler_power
+    icon: mdi:air-conditioner
+    on_press:
+      - script.execute: cooler_press
+
   # Re-reads the 14-day energy history from HA (also runs on connect and at 00:05).
   - platform: template
     name: Refresh Energy History
