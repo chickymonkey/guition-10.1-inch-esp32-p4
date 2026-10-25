@@ -32,7 +32,21 @@ Panel: 241 x 156 mm
 
 Screen: 216 x 135 mm
 
-| Button | BOOT button, GPIO35 |
+### Board layout
+
+![JC8012P4A1C board with numbered parts](docs/parts.png)
+
+| No. | Part | No. | Part | No. | Part |
+|---|---|---|---|---|---|
+| 1 | USB Full Speed (USB1, P4) | 9 | Microphone | 17 | CN5 (ESP-Prog for the ESP32-C6) |
+| 2 | USB High Speed (USB, P4) | 10 | EXTEND1 connector | 18 | CN4 (I2C, P4) |
+| 3 | USB from UART0 (P4) | 11 | Reset button (P4) | 19 | W25Q128 SPI flash chip |
+| 4 | CN2 (UART0, P4) | 12 | TF card holder | 20 | ESP32-P4 |
+| 5 | LCD FPC (MIPI-DSI, P4) | 13 | EXTEND2 connector | 21 | RTC chip (RX8025T) |
+| 6 | Touch CTP FPC | 14 | Camera FPC (MIPI-CSI, P4) | 22 | RTC battery |
+| 7 | ESP32-C6 | 15 | Battery connector (3.7 V) | 23 | BOOT button (P4) |
+| 8 | Speaker connector | 16 | Power button | 24 | USB-UART chip (CH340) |
+
 ### Pinout
 
 | Function | Pins |
