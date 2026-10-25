@@ -26,6 +26,13 @@ drive the UI directly. Board-specific changes are marked `[GUITION]` in the YAML
 | RTC | RX8025T (0x32) |
 | Button | BOOT button, GPIO35 |
 
+## Dimension
+
+Panel: 241 x 156 mm
+
+Screen: 216 x 135 mm
+
+| Button | BOOT button, GPIO35 |
 ### Pinout
 
 | Function | Pins |
