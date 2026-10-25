@@ -58,6 +58,41 @@ Screen: 216 x 135 mm
 | Touch | Reset GPIO22, interrupt GPIO21 |
 | Speaker amplifier | GPIO20 (high = on) |
 | BOOT button | GPIO35 (10 kΩ pull-up) |
+| Evaporative cooler relay | GPIO37 (UART0 TX), on CN2 pin 2 |
+
+### CN2 (UART0) connector
+
+CN2 (part 4) is a 4-pin connector on the P4's UART0. It is not needed for
+logging, which uses the USB port, so its TX pin drives the relay for an
+evaporative cooler.
+
+| CN2 pin | Signal | Use |
+|---|---|---|
+| 1 | VIN | 5 V power **input** to the board; not a supply output |
+| 2 | UART0 TX, GPIO37 (via R56, 0 Ω) | Evaporative cooler relay |
+| 3 | UART0 RX, GPIO38 (via R57, 0 Ω) | Do not use as an output: the on-board CH340 (part 24) drives this line |
+| 4 | GND | Relay module ground |
+
+The mapping is from the schematic in [`docs/5-Schematic`](docs/5-Schematic):
+pins 69 and 70 of the ESP32-P4 are GPIO37 (`UART0_TXD`) and GPIO38
+(`UART0_RXD`), the standard UART0 pins.
+
+**Relay wiring.** Use an **active-low** relay module (on when its input is
+low) with its own 5 V supply, and connect CN2 pin 2 to the module's IN and
+CN2 pin 4 to its GND. While the panel boots, the chip prints its startup
+messages on UART0 TX: the line idles high and only flickers low for
+microseconds, far too fast for a relay, so an active-low module stays off.
+In ESPHome the pin is set as `inverted: true`, so "on" means low:
+
+```yaml
+switch:
+  - platform: gpio
+    name: Evaporative Cooler
+    pin:
+      number: GPIO37
+      inverted: true        # active-low relay module: off while the line idles high
+    restore_mode: ALWAYS_OFF
+```
 
 ## Audio
 
