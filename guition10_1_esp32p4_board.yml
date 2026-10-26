@@ -6,9 +6,14 @@ substitutions:
   name: guition-p4-101
   friendly_name: Guition P4 10.1
 
-  ext_components_source: "github://n-IA-hane/esphome-intercom@main"
-  voip_stack_components_source: "github://n-IA-hane/esphome-voip-stack@main"
-  audio_stack_components_source: "github://n-IA-hane/esphome-audio-stack@main"
+  # Pinned to v2026.11.0-dev: upstream main does not build on ESPHome 2026.10 (RingBuffer::handle_ became a
+  # method; n-IA-hane/esphome-audio-stack issue #15). Back to @main once main has the fix.
+  ext_components_source: "github://n-IA-hane/esphome-intercom@v2026.11.0-dev"
+  voip_stack_components_source: "github://n-IA-hane/esphome-voip-stack@v2026.11.0-dev"
+  audio_stack_components_source: "github://n-IA-hane/esphome-audio-stack@v2026.11.0-dev"
+  # ESP-IDF components (esp_driver_ppa, esp_video_csi_compat) are fetched from the intercom repo at this
+  # git ref; the packages default it to "main", which has no esp_video_csi_compat. Keep it on the same tag.
+  intercom_idf_ref: v2026.11.0-dev
   assets_base: "https://github.com/n-IA-hane/esphome-intercom/raw/main/"
   images_base: "https://raw.githubusercontent.com/chickymonkey/guition-10.1-inch-esp32-p4/main/images/"
 
@@ -130,27 +135,27 @@ substitutions:
 # Shared packages: P4 base/hosted Wi-Fi, VoIP transport and settings, JPEG
 # video path, audio controls and the ringtone playback components.
 packages:
-  p4_base: github://n-IA-hane/esphome-intercom/packages/platform/esp32p4_base.yaml@main
-  p4_c6_sdio: github://n-IA-hane/esphome-intercom/packages/board/esp32p4_c6_sdio.yaml@main
+  p4_base: github://n-IA-hane/esphome-intercom/packages/platform/esp32p4_base.yaml@v2026.11.0-dev
+  p4_c6_sdio: github://n-IA-hane/esphome-intercom/packages/board/esp32p4_c6_sdio.yaml@v2026.11.0-dev
   # ESP32-C6 co-processor firmware update entity (esp32_c6_coprocessor_update);
   # the status bar shows its installed version.
-  p4_c6_update: github://n-IA-hane/esphome-intercom/packages/board/esp32p4_c6_update.yaml@main
-  p4_diagnostics: github://n-IA-hane/esphome-intercom/packages/diagnostics/native_no_wifi_signal.yaml@main
-  lvgl_p4_ppa: github://n-IA-hane/esphome-intercom/packages/lvgl/p4_ppa.yaml@main
-  voip_transport: github://n-IA-hane/esphome-intercom/packages/voip/transport.yaml@main
-  call_settings: github://n-IA-hane/esphome-intercom/packages/voip/call_settings.yaml@main
-  call_buttons: github://n-IA-hane/esphome-intercom/packages/voip/call_buttons.yaml@main
+  p4_c6_update: github://n-IA-hane/esphome-intercom/packages/board/esp32p4_c6_update.yaml@v2026.11.0-dev
+  p4_diagnostics: github://n-IA-hane/esphome-intercom/packages/diagnostics/native_no_wifi_signal.yaml@v2026.11.0-dev
+  lvgl_p4_ppa: github://n-IA-hane/esphome-intercom/packages/lvgl/p4_ppa.yaml@v2026.11.0-dev
+  voip_transport: github://n-IA-hane/esphome-intercom/packages/voip/transport.yaml@v2026.11.0-dev
+  call_settings: github://n-IA-hane/esphome-intercom/packages/voip/call_settings.yaml@v2026.11.0-dev
+  call_buttons: github://n-IA-hane/esphome-intercom/packages/voip/call_buttons.yaml@v2026.11.0-dev
   # Compile-time JPEG video: camera source, P4 decoder/renderer, Send Video switch.
-  p4_video_jpeg: github://n-IA-hane/esphome-intercom/packages/voip/p4_video_jpeg.yaml@main
+  p4_video_jpeg: github://n-IA-hane/esphome-intercom/packages/voip/p4_video_jpeg.yaml@v2026.11.0-dev
   # Writes the HA media route into p4_call_media_route_label / p4_video_media_route_label.
-  call_media_route: github://n-IA-hane/esphome-intercom/packages/lvgl/p4_call_media_route.yaml@main
-  audio_stack_controls: github://n-IA-hane/esphome-intercom/packages/esp_audio_stack/controls.yaml@main
+  call_media_route: github://n-IA-hane/esphome-intercom/packages/lvgl/p4_call_media_route.yaml@v2026.11.0-dev
+  audio_stack_controls: github://n-IA-hane/esphome-intercom/packages/esp_audio_stack/controls.yaml@v2026.11.0-dev
   # Speaker media player: mixer + speaker_source components and the FLAC
   # (HA's preferred format), MP3 and WAV decoders. The amplifier is switched by
   # the esp_audio_stack amplifier hooks below, not by the speaker_power_output package.
-  playback_compat: github://n-IA-hane/esphome-intercom/packages/media_player/playback_compat.yaml@main
-  http_media_codecs: github://n-IA-hane/esphome-intercom/packages/audio/http_media_codecs.yaml@main
-  flac_codecs_psram: github://n-IA-hane/esphome-intercom/packages/audio/flac_codecs_psram.yaml@main
+  playback_compat: github://n-IA-hane/esphome-intercom/packages/media_player/playback_compat.yaml@v2026.11.0-dev
+  http_media_codecs: github://n-IA-hane/esphome-intercom/packages/audio/http_media_codecs.yaml@v2026.11.0-dev
+  flac_codecs_psram: github://n-IA-hane/esphome-intercom/packages/audio/flac_codecs_psram.yaml@v2026.11.0-dev
 
 # =======BOARD AND MEMORY======================================================
 
@@ -211,8 +216,6 @@ esp32:
 external_components:
   - source: ${voip_stack_components_source}
     components: [voip_stack]
-  - source: ${ext_components_source}
-    components: [speaker]
   # [GUITION] The intercom fork's mipi_dsi (needed by p4_video_renderer), patched
   # for ESP32-P4 v3.x silicon. See components/mipi_dsi/UPSTREAM.md.
   # gsl3680: JC8012P4A1C touch driver (see components/gsl3680).
