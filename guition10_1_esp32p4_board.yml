@@ -129,6 +129,12 @@ substitutions:
   # snapshot (above) in a column beside each live stream.
   snapshot_front_cat_entity: image.porchdahuafrigate_cat
   snapshot_driveway_cat_entity: image.garagecamera_cat
+  # Media player card: this input_text holds the entity id of the player to
+  # show and control (e.g. media_player.living_room_speaker_2). Its state is
+  # read from HA's REST API, which needs a long-lived access token (HA profile
+  # > Security) in secrets.yaml as ha_token.
+  media_player_select_entity: input_text.living_room_player
+  ha_token: !secret ha_token
 
 # Shared packages: P4 base/hosted Wi-Fi, VoIP transport and settings, JPEG
 # video path, audio controls and the ringtone playback components.
@@ -808,10 +814,12 @@ font:
       - "\U000F0737"  # arrow-up-bold (garage button)
       - "\U000F0666"  # stop-circle (garage button)
       - "\U000F072E"  # arrow-down-bold (garage button)
+      - "\U000F04AE"  # skip-previous (Media card)
+      - "\U000F04AD"  # skip-next (Media card)
 
   - file: "https://raw.githubusercontent.com/Templarian/MaterialDesign-Webfont/master/fonts/materialdesignicons-webfont.ttf"
     id: font_mdi_36
-    bpp: 4             # anti-aliased (default 1 bpp is jagged)
+    bpp: 4
     size: 36
     glyphs:
       - "\U000F0238"
@@ -840,22 +848,24 @@ font:
       - "\U000F0666"  # stop-circle
       - "\U000F072E"  # arrow-down-bold
       - "\U000F0769"  # ceiling-light (Lights card)
+      - "\U000F040A"  # play (Media card)
+      - "\U000F03E4"  # pause (Media card)
+      - "\U000F04AE"  # skip-previous (Media card)
+      - "\U000F04AD"  # skip-next (Media card)
 
 # Card photos, from this repo's images/ folder (transparent PNG backgrounds).
 # resize keeps the aspect ratio and fits inside the given box.
 image:
   # Front / garage lock cards: 75% of the ~86 px card width (65x98, aspect kept).
   - platform: file
-    file: ${images_base}smart_lock.png
+    file: ${images_base}smart_lock.png?v=2
     id: img_smart_lock
-    resize: 65x232
+    resize: 65x100
     type: RGB565
     transparency: alpha_channel
     byte_order: little_endian
-  # Home page wallpaper: "Minimal Dark Blue Wave Abstract" centre-cropped to
-  # 16:10 and scaled to the 1280x800 screen (images/home_wallpaper.png).
   - platform: file
-    file: ${images_base}home_wallpaper.png
+    file: images/home_wallpaper.jpg
     id: img_home_wallpaper
     resize: 1280x800
     type: RGB565
@@ -926,6 +936,22 @@ image:
   # detection while the page is shown. buffer_size is the download buffer for
   # the JPEG file as HA sends it, so it depends on the snapshot's file size,
   # not on the resize; it stays at 64 KB.
+  # Media card album art: the player's entity_picture (HA media proxy),
+  # fetched when it changes. Art that is not JPEG fails to decode and the
+  # card shows its vinyl placeholder instead.
+  - platform: online_image
+    id: media_art_img
+    url: ${ha_base_url}/
+    format: JPEG
+    type: RGB565
+    resize: 120x120
+    update_interval: never
+    buffer_size: 65536
+    on_download_finished:
+      - lvgl.image.update: {id: media_art, src: media_art_img}
+      - lvgl.widget.show: media_art
+    on_error:
+      - lvgl.widget.hide: media_art
   - platform: online_image
     id: cam_front_person_img
     url: ${ha_base_url}/
@@ -1041,8 +1067,8 @@ lvgl:
     # Lights card tile, off state (dark grey). The on state (amber + glow) is
     # each tile's "checked:" block.
     - id: light_tile
-      width: 81
-      height: 182
+      width: 75
+      height: 162
       radius: 12
       pad_all: 0
       bg_color: 0x2A2F38
@@ -1102,6 +1128,39 @@ lvgl:
             animation: MOVE_TOP
             time: 250ms
       widgets:
+        # =====================================================================
+        # TEMPERATURE + HUMIDITY (top left, over the clock card)  col 1 span 4
+        # Icon + value only. cell_style's 6 px padding lines the first icon up
+        # with the clock card's left edge.
+        # =====================================================================
+        - obj: #Temperature and humidity status
+            styles: cell_style
+            scrollable: false
+            grid_cell_column_pos: 1
+            grid_cell_row_pos: 0
+            grid_cell_column_span: 4
+            grid_cell_row_span: 1
+            grid_cell_x_align: STRETCH
+            grid_cell_y_align: STRETCH
+            layout:
+              type: flex
+              flex_flow: ROW
+              flex_align_main: START
+              flex_align_cross: CENTER
+              pad_column: 6
+            widgets:
+              - label: {text: "\U000F04B9", text_font: font_mdi_24, text_color: 0x7FB2E5}   # sofa: living room
+              - label: {id: temp_living_label, text: "--.-°", text_font: font_small, text_color: 0xAAB8EE}
+              - obj: {width: 10, height: 1, bg_opa: TRANSP, border_width: 0}
+              - label: {text: "\U000F02E3", text_font: font_mdi_24, text_color: 0xA9B4E8}   # bed: bedroom
+              - label: {id: temp_bedroom_label, text: "--.-°", text_font: font_small, text_color: 0xAAB8EE}
+              - obj: {width: 10, height: 1, bg_opa: TRANSP, border_width: 0}
+              - label: {text: "\U000F0599", text_font: font_mdi_24, text_color: 0xD6A35D}   # sun: outdoor
+              - label: {id: temp_outdoor_label, text: "--.-°", text_font: font_small, text_color: 0xAAB8EE}
+              - obj: {width: 10, height: 1, bg_opa: TRANSP, border_width: 0}
+              - label: {text: "\U000F058C", text_font: font_mdi_24, text_color: 0x5FB8D0}   # water: humidity
+              - label: {id: humidity_label, text: "--%", text_font: font_small, text_color: 0xAAB8EE}
+
         # =====================================================================
         # SOIL MOISTURE (top, left of the status)  col 4 span 4 
         # =====================================================================
@@ -2380,7 +2439,10 @@ lvgl:
                               text_color: 0xA7B2C4
 
         # =====================================================================
-        # 7. TEMPERATURE                     col 9 span 4 | row 6 span 6
+        # 7. MEDIA PLAYER                    col 9 span 4 | row 6 span 6
+        # The player named in ${media_player_select_entity}. media_poll reads
+        # its state from HA every 3 s while the home page is shown;
+        # media_draw / media_tick fill the widgets.
         # =====================================================================
         - obj:
             styles: cell_style
@@ -2393,105 +2455,229 @@ lvgl:
             grid_cell_y_align: STRETCH
             widgets:
               - obj:
-                  id: card_temperature
+                  id: card_media
                   styles: card_style
                   width: 100%
                   height: 100%
                   scrollable: false
+                  # Blue glass: lighter at the top, a brighter blue edge.
+                  bg_color: 0x23335E
+                  bg_grad_color: 0x0F1628
+                  bg_grad_dir: VER
+                  bg_opa: 70%
+                  border_color: 0x4A64B8
                   widgets:
+                    # Album art, with a vinyl record behind it for when there
+                    # is no (JPEG) art.
+                    - obj:
+                        x: 16
+                        y: 16
+                        width: 120
+                        height: 120
+                        radius: 14
+                        bg_color: 0x1B2A55
+                        bg_grad_color: 0x121A30
+                        bg_grad_dir: VER
+                        border_color: 0x3A4F80
+                        border_width: 1
+                        pad_all: 0
+                        clip_corner: true
+                        scrollable: false
+                        widgets:
+                          - obj:
+                              align: CENTER
+                              width: 104
+                              height: 104
+                              radius: 52
+                              bg_color: 0x2563EB
+                              bg_grad_color: 0x9333EA
+                              bg_grad_dir: VER
+                              border_color: 0x1E293B
+                              border_width: 1
+                              scrollable: false
+                          - obj:      # groove ring
+                              align: CENTER
+                              width: 70
+                              height: 70
+                              radius: 35
+                              bg_opa: TRANSP
+                              border_color: 0x93C5FD
+                              border_opa: 40%
+                              border_width: 1
+                              scrollable: false
+                          - obj:      # label
+                              align: CENTER
+                              width: 36
+                              height: 36
+                              radius: 18
+                              bg_color: 0x1E2A44
+                              border_color: 0x0F172A
+                              border_width: 2
+                              scrollable: false
+                          - obj:      # spindle hole
+                              align: CENTER
+                              width: 8
+                              height: 8
+                              radius: 4
+                              bg_color: 0x0B1018
+                              border_width: 0
+                          - image:
+                              id: media_art
+                              src: media_art_img
+                              align: CENTER
+                              hidden: true
                     - label:
-                        styles: icon_24
-                        x: 14
-                        y: 10
-                        text: "\U000F050F"
+                        id: media_title_label
+                        x: 150
+                        y: 16
+                        width: 216
+                        text: "Nothing playing"
+                        text_font: font_ui_medium
+                        text_color: 0xFFFFFF
+                        long_mode: DOT
                     - label:
-                        styles: title_text
-                        x: 48
-                        y: 8
-                        text: "Temperature"
-                    - obj:          # Living Room
-                        styles: tile_style
-                        x: 12
-                        y: 46
-                        width: 173
-                        height: 80
-                        bg_color: 0x20364A
-                        border_color: 0x354F6B
-                        scrollable: false
+                        id: media_artist_label
+                        x: 150
+                        y: 50
+                        width: 216
+                        text: ""
+                        text_font: font_small_18
+                        text_color: 0x9DB4FF
+                        long_mode: DOT
+                    - label:
+                        id: media_album_label
+                        x: 150
+                        y: 76
+                        width: 216
+                        text: ""
+                        text_font: font_small
+                        text_color: 0x7183A8
+                        long_mode: DOT
+                    # Progress; drag and release to seek.
+                    - slider:
+                        id: media_seek_slider
+                        x: 152
+                        y: 112
+                        width: 208
+                        height: 6
+                        min_value: 0
+                        max_value: 1000
+                        value: 0
+                        bg_color: 0x2A3550
+                        bg_opa: COVER
+                        radius: 3
+                        indicator:
+                          bg_color: 0x3B82F6
+                          bg_grad_color: 0xC4B5FD
+                          bg_grad_dir: HOR
+                          radius: 3
+                        knob:
+                          bg_color: 0xFFFFFF
+                          pad_all: 3
+                          radius: 100
+                        on_release:
+                          - if:
+                              condition:
+                                lambda: |-
+                                  return id(media_duration) > 0 &&
+                                         id(media_entity).state.rfind("media_player.", 0) == 0;
+                              then:
+                                - lambda: |-
+                                    id(media_pos) = x / 1000.0f * id(media_duration);
+                                    id(media_pos_at) = id(my_time).now().timestamp;
+                                - homeassistant.action:
+                                    action: media_player.media_seek
+                                    data:
+                                      entity_id: !lambda 'return id(media_entity).state;'
+                                      seek_position: !lambda |-
+                                        char buf[16];
+                                        snprintf(buf, sizeof(buf), "%.1f", id(media_pos));
+                                        return std::string(buf);
+                                - script.execute: media_tick
+                    - label:
+                        id: media_elapsed_label
+                        x: 150
+                        y: 126
+                        text: "--:--"
+                        text_font: font_small
+                        text_color: 0x9DB4FF
+                    - label:
+                        id: media_duration_label
+                        x: 286
+                        y: 126
+                        width: 80
+                        text: "--:--"
+                        text_align: RIGHT
+                        text_font: font_small
+                        text_color: 0x9DB4FF
+                    - button:
+                        id: media_prev_btn
+                        styles: round_btn
+                        align: BOTTOM_MID
+                        x: -84
+                        y: -16
+                        width: 48
+                        height: 48
+                        bg_color: 0x1A2333
+                        border_color: 0x2F3B52
+                        border_width: 1
+                        on_click:
+                          - script.execute:
+                              id: media_command
+                              service: media_player.media_previous_track
                         widgets:
-                          - label: {styles: icon_24, x: 10, y: 8, text: "\U000F04B9"}
-                          - label: {x: 42, y: 8, text: "Living Room", text_font: font_small, text_color: 0xFFFFFF}
-                          - label:
-                              id: temp_living_label
-                              align: BOTTOM_LEFT
-                              x: 10
-                              y: -6
-                              text: "--.-°"
-                              text_font: font_title
-                              text_color: 0xFFFFFF
-                    - obj:          # Bedroom
-                        styles: tile_style
-                        x: 197
-                        y: 46
-                        width: 173
-                        height: 80
-                        bg_color: 0x2B3046
-                        border_color: 0x444C68
-                        scrollable: false
+                          - label: {align: CENTER, text: "\U000F04AE", text_font: font_mdi_24, text_color: 0xFFFFFF}
+                    # Play / pause: glowing blue-purple ring like the mockup.
+                    - button:
+                        id: media_play_btn
+                        styles: round_btn
+                        align: BOTTOM_MID
+                        y: -10
+                        width: 60
+                        height: 60
+                        bg_color: 0x141B2B
+                        border_color: 0x8B7CF6
+                        border_width: 3
+                        shadow_color: 0x6366F1
+                        shadow_width: 16
+                        shadow_opa: 50%
+                        on_click:
+                          # Show the new state at once; the next poll confirms it.
+                          - lambda: |-
+                              const time_t now = id(my_time).now().timestamp;
+                              if (id(media_state) == "playing") {
+                                if (id(media_pos_at) > 0) id(media_pos) += now - id(media_pos_at);
+                                id(media_state) = "paused";
+                              } else {
+                                id(media_state) = "playing";
+                              }
+                              id(media_pos_at) = now;
+                          - script.execute: media_draw
+                          - script.execute:
+                              id: media_command
+                              service: media_player.media_play_pause
                         widgets:
-                          - label: {styles: icon_24, x: 10, y: 8, text: "\U000F02E3"}
-                          - label: {x: 42, y: 8, text: "Bedroom", text_font: font_small, text_color: 0xFFFFFF}
-                          - label:
-                              id: temp_bedroom_label
-                              align: BOTTOM_LEFT
-                              x: 10
-                              y: -6
-                              text: "--.-°"
-                              text_font: font_title
-                              text_color: 0xFFFFFF
-                    - obj:          # Outdoor
-                        styles: tile_style
-                        x: 12
-                        y: 138
-                        width: 173
-                        height: 80
-                        bg_color: 0x59432D          # amber
-                        border_color: 0xD6A35D      # lighter amber edge
-                        scrollable: false
+                          - label: {id: media_play_icon, align: CENTER, text: "\U000F040A", text_font: font_mdi_36, text_color: 0xFFFFFF}
+                    - button:
+                        id: media_next_btn
+                        styles: round_btn
+                        align: BOTTOM_MID
+                        x: 84
+                        y: -16
+                        width: 48
+                        height: 48
+                        bg_color: 0x1A2333
+                        border_color: 0x2F3B52
+                        border_width: 1
+                        on_click:
+                          - script.execute:
+                              id: media_command
+                              service: media_player.media_next_track
                         widgets:
-                          - label: {styles: icon_24, x: 10, y: 8, text: "\U000F0599"}
-                          - label: {x: 42, y: 8, text: "Outdoor", text_font: font_small, text_color: 0xFFFFFF}
-                          - label:
-                              id: temp_outdoor_label
-                              align: BOTTOM_LEFT
-                              x: 10
-                              y: -6
-                              text: "--.-°"
-                              text_font: font_title
-                              text_color: 0xFFFFFF
-                    - obj:          # Humidity
-                        styles: tile_style
-                        x: 197
-                        y: 138
-                        width: 173
-                        height: 80
-                        bg_color: 0x203846
-                        border_color: 0x3D687C
-                        scrollable: false
-                        widgets:
-                          - label: {styles: icon_24, x: 10, y: 8, text: "\U000F058C"}
-                          - label: {x: 42, y: 8, text: "Humidity", text_font: font_small, text_color: 0xFFFFFF}
-                          - label:
-                              id: humidity_label
-                              align: BOTTOM_LEFT
-                              x: 10
-                              y: -6
-                              text: "--%"
-                              text_font: font_title
-                              text_color: 0xFFFFFF
+                          - label: {align: CENTER, text: "\U000F04AD", text_font: font_mdi_24, text_color: 0xFFFFFF}
 
         # =====================================================================
-        # 8. SECURITY CAMERAS                col 1 span 5 | row 12 span 5
+        # 8. SECURITY CAMERAS               col 1 span 5 | row 12 span 5
         # =====================================================================
         - obj:
             styles: cell_style
@@ -2650,15 +2836,15 @@ lvgl:
                         x: 48
                         y: 6
                         text: "Scenes"
-                    # Four scenes in a 2 x 2 grid: 172 x 86 px, 10 px gaps,
+                    # Four scenes in a 2 x 2 grid: 172 x 76 px, 10 px gaps, aligned with the Lights tiles (y 64-226),
                     # icon on the left and the name beside it.
                     - button:  #Scene Home
                         id: scene_home_btn
                         styles: scene_btn
                         x: 12
-                        y: 44
+                        y: 64
                         width: 172
-                        height: 86
+                        height: 76
                         state:
                           checked: true
                         checked:
@@ -2677,9 +2863,9 @@ lvgl:
                         id: scene_night_btn
                         styles: scene_btn
                         x: 194
-                        y: 44
+                        y: 64
                         width: 172
-                        height: 86
+                        height: 76
                         checked:
                           bg_color: 0x4F7FE8
                           border_color: 0x82A5FF
@@ -2696,9 +2882,9 @@ lvgl:
                         id: scene_movie_btn
                         styles: scene_btn
                         x: 12
-                        y: 140
+                        y: 150
                         width: 172
-                        height: 86
+                        height: 76
                         checked:
                           bg_color: 0x4F7FE8
                           border_color: 0x82A5FF
@@ -2715,9 +2901,9 @@ lvgl:
                         id: scene_cat_away_btn
                         styles: scene_btn
                         x: 194
-                        y: 140
+                        y: 150
                         width: 172
-                        height: 86
+                        height: 76
                         checked:
                           bg_color: 0x4F7FE8
                           border_color: 0x82A5FF
@@ -2765,11 +2951,11 @@ lvgl:
                         x: 48
                         y: 6
                         text: "Lights"
-                    - button:
+                    - button: #TV Lamp
                         id: light_tv_lamp_btn
                         styles: light_tile
-                        x: 12
-                        y: 44
+                        x: 15
+                        y: 64
                         clip_corner: true       # lamp image keeps the tile's rounded corners
                         checked:
                           bg_color: 0xD9901A
@@ -2786,7 +2972,7 @@ lvgl:
                         widgets:
                           - image:
                               src: img_floor_lamp
-                              align: CENTER       # exactly the tile size
+                              align: CENTER   
                               y: 3
                               clickable: false
                           - label:
@@ -2801,8 +2987,8 @@ lvgl:
                     - button:
                         id: light_living_left_btn
                         styles: light_tile
-                        x: 101
-                        y: 44
+                        x: 103
+                        y: 64
                         checked:
                           bg_color: 0xD9901A
                           border_color: 0xFBBF24
@@ -2819,7 +3005,7 @@ lvgl:
                           - label:
                               id: light_living_left_icon
                               align: TOP_MID
-                              y: 30
+                              y: 15
                               text: "\U000F0769"
                               text_font: font_mdi_36
                               text_color: 0x8995A7
@@ -2827,7 +3013,7 @@ lvgl:
                               align: BOTTOM_MID
                               y: -10
                               width: 76
-                              text: "Living Room Left"
+                              text: "Left"
                               text_align: CENTER
                               long_mode: WRAP
                               text_font: font_small
@@ -2835,8 +3021,8 @@ lvgl:
                     - button:
                         id: light_living_right_btn
                         styles: light_tile
-                        x: 190
-                        y: 44
+                        x: 193
+                        y: 64
                         checked:
                           bg_color: 0xD9901A
                           border_color: 0xFBBF24
@@ -2853,7 +3039,7 @@ lvgl:
                           - label:
                               id: light_living_right_icon
                               align: TOP_MID
-                              y: 30
+                              y: 15
                               text: "\U000F0769"
                               text_font: font_mdi_36
                               text_color: 0x8995A7
@@ -2861,7 +3047,7 @@ lvgl:
                               align: BOTTOM_MID
                               y: -10
                               width: 76
-                              text: "Living Room Right"
+                              text: "Right"
                               text_align: CENTER
                               long_mode: WRAP
                               text_font: font_small
@@ -2870,11 +3056,7 @@ lvgl:
         # ---- row 17: small bottom margin (FR(10)), intentionally empty ------
 
     # ==================================================================
-    # CAMERA PAGES: one live RTSP camera per screen, at the stream's own
-    # size (esp_rtsp_stream never upscales). Opened from the sidebar
-    # (Front Door) or by tapping a home page snapshot tile. Swipe left /
-    # right switches camera; "< Home" or swiping right past Front Door
-    # returns. Each stream only runs while its page is shown.
+    # CAMERA PAGES: one live RTSP camera per screen
     # ==================================================================
     - id: cam_front_page #Front Door camera
       bg_color: 0x0B1018
@@ -3917,7 +4099,190 @@ globals:
     restore_value: false
     initial_value: "false"
 
+  # Media card: the last state media_poll read from HA. media_pos is the
+  # position (s) at media_pos_at (UTC epoch); media_tick runs it forward
+  # while playing.
+  - id: media_state
+    type: std::string
+    restore_value: false
+    initial_value: '""'
+  - id: media_title
+    type: std::string
+    restore_value: false
+    initial_value: '""'
+  - id: media_artist
+    type: std::string
+    restore_value: false
+    initial_value: '""'
+  - id: media_album
+    type: std::string
+    restore_value: false
+    initial_value: '""'
+  - id: media_name
+    type: std::string
+    restore_value: false
+    initial_value: '""'
+  - id: media_picture
+    type: std::string
+    restore_value: false
+    initial_value: '""'
+  - id: media_duration
+    type: float
+    restore_value: false
+    initial_value: "0"
+  - id: media_pos
+    type: float
+    restore_value: false
+    initial_value: "0"
+  - id: media_pos_at
+    type: int64_t
+    restore_value: false
+    initial_value: "0"
+
 script:
+  # Media card: read the selected player's state from HA's REST API
+  # (/api/states/<entity>). Only the attributes the card uses are kept.
+  - id: media_poll
+    mode: single
+    then:
+      - if:
+          condition:
+            and:
+              - api.connected:
+              - lambda: return id(media_entity).state.rfind("media_player.", 0) == 0;
+          then:
+            - http_request.get:
+                url: !lambda 'return std::string("${ha_base_url}/api/states/") + id(media_entity).state;'
+                request_headers:
+                  Authorization: "Bearer ${ha_token}"
+                capture_response: true
+                max_response_buffer_size: 16384
+                on_response:
+                  then:
+                    - lambda: |-
+                        if (response->status_code != 200) {
+                          ESP_LOGW("media", "HA returned HTTP %d for %s", response->status_code,
+                                   id(media_entity).state.c_str());
+                          return;
+                        }
+                        JsonDocument filter;
+                        filter["state"] = true;
+                        JsonObject fa = filter["attributes"].to<JsonObject>();
+                        for (const char *k : {"media_title", "media_artist", "media_album_name", "media_duration",
+                                              "media_position", "media_position_updated_at", "entity_picture",
+                                              "friendly_name"})
+                          fa[k] = true;
+                        JsonDocument doc;
+                        const auto err = deserializeJson(doc, body, DeserializationOption::Filter(filter));
+                        if (err) {
+                          ESP_LOGW("media", "Bad state JSON (%u bytes): %s", (unsigned) body.size(), err.c_str());
+                          return;
+                        }
+                        JsonObjectConst a = doc["attributes"];
+                        id(media_state) = doc["state"] | "";
+                        id(media_title) = a["media_title"] | "";
+                        id(media_artist) = a["media_artist"] | "";
+                        id(media_album) = a["media_album_name"] | "";
+                        id(media_name) = a["friendly_name"] | "";
+                        id(media_duration) = a["media_duration"] | 0.0f;
+                        id(media_pos) = a["media_position"] | 0.0f;
+                        // "2026-10-27T10:53:12.345+00:00" (UTC) to epoch seconds.
+                        int Y, M, D, h, m, s;
+                        const char *at = a["media_position_updated_at"] | "";
+                        if (sscanf(at, "%d-%d-%dT%d:%d:%d", &Y, &M, &D, &h, &m, &s) == 6) {
+                          Y -= M <= 2;
+                          const int era = Y / 400, yoe = Y - era * 400;
+                          const int doy = (153 * (M + (M > 2 ? -3 : 9)) + 2) / 5 + D - 1;
+                          const int doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+                          const int64_t days = (int64_t) era * 146097 + doe - 719468;
+                          id(media_pos_at) = days * 86400 + h * 3600 + m * 60 + s;
+                        } else {
+                          id(media_pos_at) = 0;
+                        }
+                        // New art (the proxy URL changes per track): download it.
+                        std::string pic = a["entity_picture"] | "";
+                        if (pic != id(media_picture)) {
+                          id(media_picture) = pic;
+                          if (pic.empty()) {
+                            lv_obj_add_flag(id(media_art), LV_OBJ_FLAG_HIDDEN);
+                          } else {
+                            id(media_art_img).set_url(pic.rfind("http", 0) == 0 ? pic : "${ha_base_url}" + pic);
+                            id(media_art_img).update();
+                          }
+                        }
+                    - script.execute: media_draw
+                on_error:
+                  - logger.log:
+                      level: WARN
+                      tag: media
+                      format: "Media player state request failed"
+
+  # Media card: title, artist, album and the play / pause icon.
+  - id: media_draw
+    then:
+      - lambda: |-
+          const std::string &st = id(media_state);
+          const bool valid = id(media_entity).state.rfind("media_player.", 0) == 0;
+          const bool active = st == "playing" || st == "paused" || st == "buffering";
+          std::string title = id(media_title), artist = id(media_artist), album = id(media_album);
+          if (!valid) {
+            title = "No player";
+            artist = "Set ${media_player_select_entity}";
+            album = "";
+          } else if (!active || title.empty()) {
+            title = "Nothing playing";
+            artist = id(media_name);
+            album = st;
+            if (!album.empty()) album[0] = toupper(album[0]);
+          }
+          lv_label_set_text(id(media_title_label), title.c_str());
+          lv_label_set_text(id(media_artist_label), artist.c_str());
+          lv_label_set_text(id(media_album_label), album.c_str());
+          lv_label_set_text(id(media_play_icon), st == "playing" ? "\U000F03E4" : "\U000F040A");
+      - script.execute: media_tick
+
+  # Media card: progress bar and times (every second while playing).
+  - id: media_tick
+    then:
+      - lambda: |-
+          if (lv_obj_has_state(id(media_seek_slider), LV_STATE_PRESSED)) return;   // being dragged
+          const float dur = id(media_duration);
+          float pos = id(media_pos);
+          if (id(media_state) == "playing" && id(media_pos_at) > 0 && id(my_time).now().is_valid())
+            pos += (float) (id(my_time).now().timestamp - id(media_pos_at));
+          pos = std::max(0.0f, dur > 0 ? std::min(pos, dur) : pos);
+          auto fmt = [](float sec, char *buf, size_t n) {
+            const int t = (int) sec;
+            if (t >= 3600) snprintf(buf, n, "%d:%02d:%02d", t / 3600, t / 60 % 60, t % 60);
+            else snprintf(buf, n, "%d:%02d", t / 60, t % 60);
+          };
+          char a[16] = "--:--", b[16] = "--:--";
+          if (dur > 0) {
+            fmt(pos, a, sizeof(a));
+            fmt(dur, b, sizeof(b));
+          }
+          lv_label_set_text(id(media_elapsed_label), a);
+          lv_label_set_text(id(media_duration_label), b);
+          lv_slider_set_value(id(media_seek_slider), dur > 0 ? (int) (pos / dur * 1000) : 0, LV_ANIM_OFF);
+
+  # Media card buttons: run a media_player action on the selected player,
+  # then re-read its state.
+  - id: media_command
+    mode: restart
+    parameters:
+      service: string
+    then:
+      - if:
+          condition:
+            lambda: return id(media_entity).state.rfind("media_player.", 0) == 0;
+          then:
+            - homeassistant.action:
+                action: !lambda 'return service;'
+                data:
+                  entity_id: !lambda 'return id(media_entity).state;'
+            - delay: 800ms
+            - script.execute: media_poll
+
   # Home page clock card: time, day and date (no seconds shown).
   - id: update_clock
     then:
@@ -5115,6 +5480,21 @@ text_sensor:
     on_value:
       - lambda: id(driveway_full).set_url(x);
 
+  # Media card: which media_player to show (an entity id held in HA).
+  - platform: homeassistant
+    id: media_entity
+    entity_id: ${media_player_select_entity}
+    internal: true
+    on_value:
+      - lambda: |-
+          id(media_state) = id(media_title) = id(media_artist) = id(media_album) = id(media_name) = "";
+          id(media_picture) = "";
+          id(media_duration) = id(media_pos) = 0;
+          id(media_pos_at) = 0;
+          lv_obj_add_flag(id(media_art), LV_OBJ_FLAG_HIDDEN);
+      - script.execute: media_draw
+      - script.execute: media_poll
+
   # Frigate snapshots for the home page tiles. The image entity's state
   # changes on every new detection; its entity_picture attribute is the
   # tokenised image-proxy path (the token rotates, so it is read each time).
@@ -5234,6 +5614,23 @@ interval:
   - interval: 3s
     then:
       - script.execute: light_tiles_check
+
+  # Media card: re-read the player state while the home page is shown, and
+  # move the progress bar every second while playing.
+  - interval: 3s
+    then:
+      - if:
+          condition:
+            lambda: return id(home_page)->is_showing();
+          then:
+            - script.execute: media_poll
+  - interval: 1s
+    then:
+      - if:
+          condition:
+            lambda: return id(home_page)->is_showing() && id(media_state) == "playing";
+          then:
+            - script.execute: media_tick
 
   # Settings page uptime ticks every second, only while that page is shown.
   - interval: 1s
