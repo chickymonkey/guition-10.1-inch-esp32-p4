@@ -86,6 +86,9 @@ substitutions:
   # Gas heater: the Rinnai Touch power and circulation fan switches.
   heater_power_switch: switch.rinnai_touch_on_off_switch
   heater_fan_switch: switch.rinnai_touch_circulation_fan_switch
+  # Rinnai Touch climate entity: its "temperature" attribute is the target
+  # (fan speed in fan-only mode), "hvac_action" the status (heating, idle...).
+  heater_climate_entity: climate.rinnai_touch
   front_lock_entity: lock.frontdoor_aqara
   garage_lock_entity: lock.garagedoor_aqara
   # Garage roller door: position sensor (also gives Open/Closed), the "next
@@ -816,6 +819,10 @@ font:
       - "\U000F072E"  # arrow-down-bold (garage button)
       - "\U000F04AE"  # skip-previous (Media card)
       - "\U000F04AD"  # skip-next (Media card)
+      - "\U000F0374"  # minus (heater target)
+      - "\U000F0415"  # plus (heater target)
+      - "\U000F0717"  # snowflake (heater Cool)
+      - "\U000F0210"  # fan (heater Fan)
 
   - file: "https://raw.githubusercontent.com/Templarian/MaterialDesign-Webfont/master/fonts/materialdesignicons-webfont.ttf"
     id: font_mdi_36
@@ -865,18 +872,18 @@ image:
     transparency: alpha_channel
     byte_order: little_endian
   - platform: file
-    file: images/home_wallpaper.jpg
+    file: ${images_base}home_wallpaper.jpg?v=2
     id: img_home_wallpaper
     resize: 1280x800
     type: RGB565
     byte_order: little_endian
-  # Lights card: TV floor lamp filling its whole 81x182 tile. The PNG is
-  # already that size with a transparent background, so the tile's grey
-  # (off) or amber (on) colour shows around the lamp.
+  # Lights card: TV floor lamp in its tile. The PNG is already 81x162 with a
+  # transparent background, so the tile's grey (off) or amber (on) colour
+  # shows around the lamp.
   - platform: file
-    file: ${images_base}floorlamp.png
+    file: ${images_base}floorlamp.png?v=3
     id: img_floor_lamp
-    resize: 81x182
+    resize: 81x162
     type: RGB565
     transparency: alpha_channel
     byte_order: little_endian
@@ -1037,12 +1044,17 @@ lvgl:
       radius: 100
       border_width: 0
       shadow_width: 0
-    - id: mode_btn
-      bg_color: 0x202B3B
-      border_color: 0x34445A
-      border_width: 1
-      radius: 9
+    # Gas heater Heat / Cool / Fan segment, unselected (Heat and Fan add a
+    # blue-violet fill in their "checked:" block).
+    - id: heater_mode_btn
+      width: 58
+      height: 52
+      radius: 12
+      pad_all: 0
+      bg_opa: TRANSP
+      border_width: 0
       shadow_width: 0
+      text_color: 0x9DB4FF
     - id: scene_btn
       bg_color: 0x202B3B
       bg_opa: 50%
@@ -1386,125 +1398,245 @@ lvgl:
                   width: 100%
                   height: 100%
                   scrollable: false
+                  # Blue glass, as on the media card.
+                  bg_color: 0x23335E
+                  bg_grad_color: 0x0F1628
+                  bg_grad_dir: VER
+                  bg_opa: 70%
+                  border_color: 0x4A64B8
                   widgets:
-                    - label:
-                        styles: icon_24
-                        x: 14
-                        y: 10
-                        text: "\U000F0238"
-                    - label:
-                        styles: title_text
-                        x: 48
+                    # ---- left: current temperature ring (living room) ----
+                    # Arc range 10-35 degrees; not touchable (clickable: false)
+                    # but keeps its knob as the end-of-arc dot.
+                    - arc:
+                        id: heater_current_arc
+                        x: 16
                         y: 8
-                        text: "Gas Heater"
-                    - obj:          # heater picture placeholder (swap for an image: later)
-                        x: 18
-                        y: 46
-                        width: 130
-                        height: 84
-                        radius: 8
-                        bg_color: 0x171D26
-                        border_color: 0x3B4656
-                        border_width: 3
+                        width: 144
+                        height: 144
+                        min_value: 10
+                        max_value: 35
+                        value: 10
+                        clickable: false
+                        arc_color: 0x29364A
+                        arc_width: 8
+                        indicator:
+                          arc_color: 0x6A7BFF
+                          arc_width: 8
+                        knob:
+                          bg_color: 0xE0E7FF
+                          pad_all: 3
+                    - obj:          # inner disc
+                        x: 36
+                        y: 28
+                        width: 104
+                        height: 104
+                        radius: 52
+                        bg_color: 0x0F1628
+                        border_color: 0x2A3A5E
+                        border_width: 1
+                        clickable: false
+                        scrollable: false
+                        widgets:
+                          - label: {align: CENTER, y: -30, text: "Current", text_font: font_small, text_color: 0x9DB4FF}
+                          - label:
+                              id: heater_current_label
+                              align: CENTER
+                              y: 0
+                              text: "--°"
+                              text_font: font_title
+                              text_color: 0xFFFFFF
+                          - label: {align: CENTER, y: 30, text: "\U000F050F", text_font: font_mdi_24, text_color: 0x60A5FA}
+
+                    # ---- left: target pill (- value +) ----
+                    - obj:
+                        x: 12
+                        y: 164
+                        width: 160
+                        height: 56
+                        radius: 28
+                        bg_color: 0x151D2B
+                        border_color: 0x2F3B52
+                        border_width: 1
                         pad_all: 0
                         scrollable: false
                         widgets:
-                          - obj:
-                              align: BOTTOM_MID
-                              width: 100%
-                              height: 50%
-                              radius: 3
-                              border_width: 0
-                              bg_color: 0xE5A45B
-                              bg_grad_color: 0xB95C3D
-                              bg_grad_dir: VER
-                    - button:
-                        id: heater_power_btn
-                        styles: round_btn
-                        align: TOP_RIGHT
-                        x: -28                  # 48 px, same as the lock buttons;
-                        y: 54                   # centre kept where the 52 px button was
-                        width: 48
-                        height: 48
-                        bg_color: 0x527FD6
-                        on_click:
-                          - homeassistant.action:
-                              action: switch.toggle
-                              data:
-                                entity_id: ${heater_power_switch}
-                        widgets:
+                          - button:
+                              styles: round_btn
+                              align: LEFT_MID
+                              x: 5
+                              width: 44
+                              height: 44
+                              bg_color: 0x1A2333
+                              border_color: 0x2F3B52
+                              border_width: 1
+                              on_click:
+                                - script.execute: {id: heater_target_step, delta: -1}
+                              widgets:
+                                - label: {align: CENTER, text: "\U000F0374", text_font: font_mdi_24, text_color: 0xFFFFFF}
                           - label:
+                              id: heater_target_title
                               align: CENTER
-                              text: "\U000F0425"
-                              text_font: font_mdi_24
+                              y: -11
+                              text: "Target"
+                              text_font: font_small
+                              text_color: 0x9DB4FF
+                          - label:
+                              id: heater_target_label
+                              align: CENTER
+                              y: 11
+                              text: "--°"
+                              text_font: font_ui_medium
                               text_color: 0xFFFFFF
-                    - obj:          # mode buttons row
-                        align: BOTTOM_MID
-                        y: -12
-                        width: 354
-                        height: 40
-                        bg_opa: TRANSP
+                          - button:
+                              styles: round_btn
+                              align: RIGHT_MID
+                              x: -5
+                              width: 44
+                              height: 44
+                              bg_color: 0x1A2333
+                              border_color: 0x2F3B52
+                              border_width: 1
+                              on_click:
+                                - script.execute: {id: heater_target_step, delta: 1}
+                              widgets:
+                                - label: {align: CENTER, text: "\U000F0415", text_font: font_mdi_24, text_color: 0xFFFFFF}
+
+                    # ---- right: header ----
+                    - obj:          # icon tile
+                        x: 186
+                        y: 12
+                        width: 44
+                        height: 44
+                        radius: 10
+                        bg_color: 0x2A3570
+                        border_color: 0x4A5BB0
+                        border_width: 1
+                        scrollable: false
+                        widgets:
+                          - label: {align: CENTER, text: "\U000F0238", text_font: font_mdi_24, text_color: 0xA5B4FC}
+                    - label:
+                        x: 242
+                        y: 8
+                        text: "Gas Heater"
+                        text_font: font_body
+                        text_color: 0xFFFFFF
+                    - label:
+                        id: heater_status_label
+                        x: 242
+                        y: 36
+                        text: "--"
+                        text_font: font_small
+                        text_color: 0x8DA2E0
+                    - obj:          # divider
+                        x: 186
+                        y: 66
+                        width: 184
+                        height: 1
+                        bg_color: 0x2F3B52
                         border_width: 0
-                        pad_all: 0
+
+                    # ---- right: Heat / Cool / Fan ----
+                    # Heat = heater on, Fan = circulation fan on (Rinnai Touch
+                    # switches), Cool = one press of the evaporative cooler
+                    # relay (it toggles the cooler, so it has no on state).
+                    - obj:
+                        x: 186
+                        y: 76
+                        width: 184
+                        height: 60
+                        radius: 16
+                        bg_color: 0x151D2B
+                        border_color: 0x2F3B52
+                        border_width: 1
+                        pad_all: 4
                         scrollable: false
                         layout:
                           type: flex
                           flex_flow: ROW
                           flex_align_main: SPACE_BETWEEN
                           flex_align_cross: CENTER
+                          pad_column: 0
                         widgets:
-                          # Rinnai Touch switches (as in the HA dashboard):
-                          # Off = heater and fan off, Heat = heater on,
-                          # Fan = circulation fan on.
-                          - button:
-                              id: heater_btn_off
-                              styles: mode_btn
-                              width: 110
-                              height: 40
-                              checked:
-                                bg_color: 0x4F7FE8
-                                border_color: 0x82A5FF
-                              on_click:
-                                - homeassistant.action:
-                                    action: switch.turn_off
-                                    data:
-                                      entity_id: ${heater_power_switch}
-                                - homeassistant.action:
-                                    action: switch.turn_off
-                                    data:
-                                      entity_id: ${heater_fan_switch}
-                              widgets:
-                                - label: {align: CENTER, text: "Off", text_font: font_small}
                           - button:
                               id: heater_btn_heat
-                              styles: mode_btn
-                              width: 110
-                              height: 40
+                              styles: heater_mode_btn
                               checked:
-                                bg_color: 0x4F7FE8
-                                border_color: 0x82A5FF
+                                bg_opa: COVER
+                                bg_color: 0x4F5BD5
+                                bg_grad_color: 0x6D4FE0
+                                bg_grad_dir: VER
+                                border_color: 0x8B9BFF
+                                border_width: 1
+                                text_color: 0xFFFFFF
                               on_click:
                                 - homeassistant.action:
                                     action: switch.turn_on
                                     data:
                                       entity_id: ${heater_power_switch}
                               widgets:
-                                - label: {align: CENTER, text: "Heat", text_font: font_small}
+                                - label: {align: TOP_MID, y: 4, text: "\U000F0238", text_font: font_mdi_24}
+                                - label: {align: BOTTOM_MID, y: -2, text: "Heat", text_font: font_small}
+                          - button:
+                              id: heater_btn_cool
+                              styles: heater_mode_btn
+                              on_click:
+                                - script.execute: cooler_press
+                              widgets:
+                                - label: {align: TOP_MID, y: 4, text: "\U000F0717", text_font: font_mdi_24}
+                                - label: {align: BOTTOM_MID, y: -2, text: "Cool", text_font: font_small}
                           - button:
                               id: heater_btn_fan
-                              styles: mode_btn
-                              width: 110
-                              height: 40
+                              styles: heater_mode_btn
                               checked:
-                                bg_color: 0x4F7FE8
-                                border_color: 0x82A5FF
+                                bg_opa: COVER
+                                bg_color: 0x4F5BD5
+                                bg_grad_color: 0x6D4FE0
+                                bg_grad_dir: VER
+                                border_color: 0x8B9BFF
+                                border_width: 1
+                                text_color: 0xFFFFFF
                               on_click:
                                 - homeassistant.action:
                                     action: switch.turn_on
                                     data:
                                       entity_id: ${heater_fan_switch}
                               widgets:
-                                - label: {align: CENTER, text: "Fan", text_font: font_small}
+                                - label: {align: TOP_MID, y: 4, text: "\U000F0210", text_font: font_mdi_24}
+                                - label: {align: BOTTOM_MID, y: -2, text: "Fan", text_font: font_small}
+
+                    # ---- right: power (on = glowing ring) ----
+                    # On (heat or fan): turns both off. Off: turns the heater on.
+                    - button:
+                        id: heater_power_btn
+                        styles: round_btn
+                        x: 246
+                        y: 150
+                        width: 64
+                        height: 64
+                        bg_color: 0x141B2B
+                        border_color: 0x3A4660
+                        border_width: 3
+                        on_click:
+                          - if:
+                              condition:
+                                lambda: return id(heater_power_on).state || id(heater_fan_on).state;
+                              then:
+                                - homeassistant.action:
+                                    action: switch.turn_off
+                                    data:
+                                      entity_id: ${heater_power_switch}
+                                - homeassistant.action:
+                                    action: switch.turn_off
+                                    data:
+                                      entity_id: ${heater_fan_switch}
+                              else:
+                                - homeassistant.action:
+                                    action: switch.turn_on
+                                    data:
+                                      entity_id: ${heater_power_switch}
+                        widgets:
+                          - label: {align: CENTER, text: "\U000F0425", text_font: font_mdi_36, text_color: 0xFFFFFF}
 
         # =====================================================================
         # 3. GARAGE Roller DOOR                     col 9 span 2 | row 1 span 5
@@ -4099,6 +4231,13 @@ globals:
     restore_value: false
     initial_value: "false"
 
+  # Gas heater target from the climate entity (NAN until HA sends it; also
+  # set at once by the - / + buttons).
+  - id: heater_target
+    type: float
+    restore_value: false
+    initial_value: "NAN"
+
   # Media card: the last state media_poll read from HA. media_pos is the
   # position (s) at media_pos_at (UTC epoch); media_tick runs it forward
   # while playing.
@@ -5045,12 +5184,10 @@ script:
       - delay: 250ms
       - switch.turn_off: cooler_relay
 
+  # Gas heater card: Heat / Fan highlight, the power ring and the target pill
+  # (in fan-only mode the Rinnai "target" is the fan speed, 1-16).
   - id: heater_update_buttons
     then:
-      - lvgl.widget.update:
-          id: heater_btn_off
-          state:
-            checked: !lambda 'return !id(heater_power_on).state && !id(heater_fan_on).state;'
       - lvgl.widget.update:
           id: heater_btn_heat
           state:
@@ -5058,7 +5195,50 @@ script:
       - lvgl.widget.update:
           id: heater_btn_fan
           state:
-            checked: !lambda 'return id(heater_fan_on).state;'
+            checked: !lambda 'return id(heater_fan_on).state && !id(heater_power_on).state;'
+      - lambda: |-
+          const bool on = id(heater_power_on).state || id(heater_fan_on).state;
+          lv_obj_t *btn = id(heater_power_btn);
+          lv_obj_set_style_border_color(btn, lv_color_hex(on ? 0x8B7CF6 : 0x3A4660), LV_PART_MAIN);
+          lv_obj_set_style_shadow_color(btn, lv_color_hex(0x6366F1), LV_PART_MAIN);
+          lv_obj_set_style_shadow_width(btn, on ? 18 : 0, LV_PART_MAIN);
+          lv_obj_set_style_shadow_opa(btn, LV_OPA_50, LV_PART_MAIN);
+      - script.execute: heater_draw_target
+
+  - id: heater_draw_target
+    then:
+      - lambda: |-
+          const bool fan_only = id(heater_fan_on).state && !id(heater_power_on).state;
+          const float t = id(heater_target);
+          char buf[12] = "--";
+          if (!std::isnan(t) && t > 0) snprintf(buf, sizeof(buf), fan_only ? "%.0f" : "%.0f°", t);
+          else if (!fan_only) snprintf(buf, sizeof(buf), "--°");
+          lv_label_set_text(id(heater_target_label), buf);
+          lv_label_set_text(id(heater_target_title), fan_only ? "Fan speed" : "Target");
+
+  # Target - / +: shows the new value at once and sends it 700 ms after the
+  # last tap, so several taps make one climate.set_temperature call.
+  - id: heater_target_step
+    mode: restart
+    parameters:
+      delta: int
+    then:
+      - lambda: |-
+          const bool fan_only = id(heater_fan_on).state && !id(heater_power_on).state;
+          const float lo = fan_only ? 1 : 8, hi = fan_only ? 16 : 30;
+          float t = id(heater_target);
+          if (std::isnan(t) || t <= 0) t = fan_only ? 8 : 20;
+          id(heater_target) = std::min(hi, std::max(lo, t + delta));
+      - script.execute: heater_draw_target
+      - delay: 700ms
+      - homeassistant.action:
+          action: climate.set_temperature
+          data:
+            entity_id: ${heater_climate_entity}
+            temperature: !lambda |-
+              char buf[8];
+              snprintf(buf, sizeof(buf), "%.0f", id(heater_target));
+              return std::string(buf);
 
   # Garage button shows the controller's next action: Stop (red), Down, or Up.
   - id: garage_update_button
@@ -5422,6 +5602,29 @@ sensor:
           text:
             format: "%.1f°"
             args: ['x']
+      # Gas heater card: "Current" ring.
+      - lvgl.label.update:
+          id: heater_current_label
+          text:
+            format: "%.0f°"
+            args: ['x']
+      - lvgl.arc.update:
+          id: heater_current_arc
+          value: !lambda 'return (int) roundf(std::min(35.0f, std::max(10.0f, x)));'
+
+  # Gas heater target (climate "temperature" attribute).
+  - platform: homeassistant
+    id: heater_target_sensor
+    entity_id: ${heater_climate_entity}
+    attribute: temperature
+    internal: true
+    on_value:
+      - if:
+          condition:
+            lambda: return !id(heater_target_step).is_running();   # not while a tap is pending
+          then:
+            - lambda: id(heater_target) = x;
+            - script.execute: heater_draw_target
 
   - platform: homeassistant
     id: ha_temp_bedroom
@@ -5479,6 +5682,22 @@ text_sensor:
     entity_id: input_text.esp_camera_url_driveway
     on_value:
       - lambda: id(driveway_full).set_url(x);
+
+  # Gas heater status under the title, from the climate hvac_action.
+  - platform: homeassistant
+    id: heater_action
+    entity_id: ${heater_climate_entity}
+    attribute: hvac_action
+    internal: true
+    on_value:
+      - lvgl.label.update:
+          id: heater_status_label
+          text: !lambda |-
+            if (x == "heating") return std::string("Heating");
+            if (x == "idle") return std::string("Idle");
+            if (x == "fan") return std::string("Fan only");
+            if (x == "off") return std::string("Off");
+            return x;
 
   # Media card: which media_player to show (an entity id held in HA).
   - platform: homeassistant
