@@ -10951,10 +10951,105 @@ function object1Min() = [-121.400, -79.350, -0.000];
 function object1Max() = [121.400, 79.350, 18.000];
 
 
+// ---------------------------------------------------------------------------
+// Sliding anti-lift screw-hole cap (separate printed part)
+//   part = "print"    : mount + cap laid out for printing (default)
+//          "mount"    : mount only
+//          "cap"      : cap only, print orientation
+//          "assembly" : cap installed, closed (covers the tab screw hole)
+//          "open"     : cap installed, slid open (screw hole exposed)
+//
+// A horizontal dovetail groove is cut into the outer face of the top frame
+// wall (Y=79.35), just above the anti-lift tab. The 3 mm wall is thickened
+// INWARD to ~7 mm, only in the bottom half (Z 0..9). That keeps clear of the
+// screen recess (ledge at Z=13.3) and adds nothing outside the frame.
+// The cap's key enters straight through a widened entry pocket at the -X end,
+// then slides +X along the dovetail until it stops over the screw hole.
+// Nothing goes below Z=0, so the wall-facing surface stays flush.
+// ---------------------------------------------------------------------------
+part          = "print";
+
+tab_hole      = [0, 81.6];   // existing anti-lift tab screw hole centre (X, Y)
+tab_top       = 2;           // existing tab thickness (top face Z)
+wall_out      = 79.35;       // outer face of the top frame wall
+wall_in       = 76.35;       // inner face of the top frame wall
+
+groove_len    = 30;          // total groove length along X
+cap_len       = 10;          // cap length along X
+fit           = 0.2;         // sliding clearance per side
+slide_travel  = groove_len - cap_len - 2*fit;   // ~19.6 mm: fully clears the 10 mm tab
+
+dt_neck       = 2;           // groove width (Z) at the wall face (narrow)
+dt_base       = 3;           // groove width (Z) at the groove floor (wide)
+dt_depth      = 2.5;         // groove depth into the wall (-Y)
+groove_zc     = 5.5;         // groove centre height
+
+thick_y       = wall_out - 7;   // inner face of the locally thickened wall
+thick_h       = 9;              // bottom half of the 18 mm frame
+thick_margin  = 2;              // extra thickening beyond the groove ends
+
+groove_x1     = tab_hole[0] + cap_len/2 + fit;   // closed end (stop)
+groove_x0     = groove_x1 - groove_len;          // open end (entry pocket)
+groove_floor  = wall_out - dt_depth;
+
+screw_head_h  = 1.5;         // head height the cap must slide over
+cap_out       = 85.35;       // cap outer face (1 mm past the tab edge)
+cap_top       = thick_h;
+
+// Dovetail profile in the YZ plane, extruded along +X from x0 for len.
+// y0/w0 is one end of the profile, y1/w1 the other; widths are along Z.
+module dovetail_x(x0, len, zc, y0, w0, y1, w1) {
+    translate([x0, 0, 0]) rotate([90, 0, 90])
+        linear_extrude(height=len)
+            polygon([[y0, zc - w0/2], [y1, zc - w1/2], [y1, zc + w1/2], [y0, zc + w0/2]]);
+}
+
+// Groove width at depth y (wide at the floor, narrow at the wall face).
+function groove_w(y) = dt_base - (y - groove_floor) / dt_depth * (dt_base - dt_neck);
+
+// Inward thickening behind the groove (inside the frame, bottom half only).
+module wall_thickening() {
+    translate([groove_x0 - thick_margin, thick_y, 0])
+        cube([groove_len + 2*thick_margin, wall_in - thick_y + 0.01, thick_h]);
+}
+
+module groove_cut() {
+    // dovetail along the whole groove
+    dovetail_x(groove_x0, groove_len, groove_zc,
+               groove_floor, dt_base, wall_out + 0.1, dt_neck);
+    // straight-in entry pocket at the open end so the key can be inserted
+    translate([groove_x0, groove_floor, groove_zc - dt_base/2])
+        cube([cap_len + 2*fit, dt_depth + 0.1, dt_base]);
+}
+
+// Cap modelled in the closed position, centred over the screw hole.
+module slide_cap() {
+    x0 = tab_hole[0] - cap_len/2;
+    y_in = wall_out + fit;
+    union() {
+        // cover block over the tab, with a through channel along X so the cap
+        // can slide over the screw head while opening/closing
+        difference() {
+            translate([x0, y_in, tab_top + fit])
+                cube([cap_len, cap_out - y_in, cap_top - (tab_top + fit)]);
+            translate([x0 - 0.1, tab_hole[1] - 1.6, tab_top])
+                cube([cap_len + 0.2, 3.2, screw_head_h + fit]);
+        }
+        // dovetail key (groove profile minus clearance) and neck to the body
+        dovetail_x(x0, cap_len, groove_zc,
+                   groove_floor + fit, groove_w(groove_floor + fit) - 2*fit,
+                   wall_out, dt_neck - 2*fit);
+        translate([x0, wall_out - 0.01, groove_zc - (dt_neck - 2*fit)/2])
+            cube([cap_len, fit + 0.02, dt_neck - 2*fit]);
+    }
+}
+
 // Screw pads: increased from 4mm to 7mm total thickness (z 9.3..16.3).
 // Added 3mm annular extensions above the existing pads; 2.8mm screw clearance retained.
 // at (+-106.4, +-64.35) and (16.4, +-64.35).
+module mount() {
 color("black")
+difference() {
 union() {
     object1(1);
     // Extend the six existing screw pads by 3mm while retaining the M2.5 clearance holes.
@@ -10969,4 +11064,30 @@ union() {
     // fill the old USB cable half circle notch (x 95.4..101.4) at the bottom of the front wall
     translate([95.0, -79.35, 0]) cube([6.8, 3.0, 5.5]);   // 3mm wall, notch was up to z=5
     translate([95.0, -76.35, 0]) cube([6.8, 3.0, 3.0]);   // 3mm base lip behind the wall
+
+    // Anti-lift tab: 10mm wide x 5mm projection x 2mm thick,
+    // centred on the top edge (positive Y), with a 1.5mm screw hole.
+    // The tab is aligned to Z=0 so its back face is flush with the wall-facing plane.
+    difference() {
+        translate([-5, 78.85, 0]) cube([10, 5.5, 2]);
+        translate([0, 81.6, -0.1]) cylinder(h=2.2, d=1.5, $fn=32);
+    }
+
+    // Inward wall thickening that backs the sliding-cap groove.
+    wall_thickening();
 }
+    // Dovetail groove for the sliding cap, in the top frame wall's outer face.
+    groove_cut();
+}
+}
+
+// Cap laid on its outer face (Y=cap_out) for printing, beside the mount.
+module cap_print() {
+    translate([0, 100, 0]) rotate([-90, 0, 0]) translate([0, -cap_out, 0]) slide_cap();
+}
+
+if (part == "mount" || part == "print" || part == "assembly" || part == "open") mount();
+if (part == "cap")      cap_print();
+if (part == "print")    color("dimgray") cap_print();
+if (part == "assembly") color("dimgray") slide_cap();
+if (part == "open")     color("dimgray") translate([-slide_travel, 0, 0]) slide_cap();
