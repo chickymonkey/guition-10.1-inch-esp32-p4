@@ -916,18 +916,18 @@ image:
     transparency: alpha_channel
     byte_order: little_endian
   - platform: file
-    file: ${images_base}home_wallpaper.png?v=5
+    file: ${images_base}home_wallpaper.png?v=6
     id: img_home_wallpaper
     resize: 1280x800
     type: RGB565
     byte_order: little_endian
-  # Lights card: TV floor lamp in its 162 px tile. The PNG is 81x182 with a
+  # Lights card: TV floor lamp in its 202 px tile. The PNG is 60x181 with a
   # transparent background, so the tile's grey (off) or amber (on) colour
   # shows around the lamp.
   - platform: file
-    file: ${images_base}floorlamp.png?v=4
+    file: ${images_base}floorlamp.png?v=5
     id: img_floor_lamp
-    resize: 81x182
+    resize: 60x181
     type: RGB565
     transparency: alpha_channel
     byte_order: little_endian
@@ -2430,6 +2430,8 @@ lvgl:
       bg_color: 0x0B1018
       bg_image_src: img_home_wallpaper
       scrollable: false
+      on_load:
+        - lvgl.widget.hide: security_confirm
       on_swipe_right:
         - lvgl.page.show:
             id: home_page
@@ -2522,10 +2524,10 @@ lvgl:
                                         id: front_lock_state
                                         state: "locked"
                                     then:
-                                      - homeassistant.action:
-                                          action: lock.unlock
-                                          data:
-                                            entity_id: ${front_lock_entity}
+                                      - script.execute:
+                                          id: security_confirm_show
+                                          action: 1
+                                          question: "Unlock the front door?"
                                     else:
                                       - homeassistant.action:
                                           action: lock.lock
@@ -2587,10 +2589,10 @@ lvgl:
                                         id: garage_lock_state
                                         state: "locked"
                                     then:
-                                      - homeassistant.action:
-                                          action: lock.unlock
-                                          data:
-                                            entity_id: ${garage_lock_entity}
+                                      - script.execute:
+                                          id: security_confirm_show
+                                          action: 2
+                                          question: "Unlock the garage door?"
                                     else:
                                       - homeassistant.action:
                                           action: lock.lock
@@ -2680,36 +2682,40 @@ lvgl:
                                       - obj: {styles: garage_slat}
                                       - obj: {styles: garage_slat}
 
-                          # Open / Closed / Partly open, left of the control button
-                          # and centred on it (button centre is 36 px above the
-                          # card bottom).
+                          # Open / Closed / Partly open, top right beside the title.
                           - label:
                               id: garage_status_label
-                              align: BOTTOM_RIGHT
-                              x: -72
-                              y: -25
+                              align: TOP_RIGHT
+                              x: -12
+                              y: 12
                               text: "--"
                               text_font: font_small
                               text_color: 0xA7B2C4
                           # One button for the controller's next action (Up / Stop /
-                          # Down); garage_update_button sets its icon and colour.
+                          # Down), centred below the door; garage_update_button sets
+                          # its icon and colour. Up / Down ask for confirmation
+                          # first, Stop acts at once.
                           - button:
                               id: garage_btn
                               styles: round_btn
-                              align: BOTTOM_RIGHT
-                              x: -12
-                              y: -12
+                              align: TOP_MID
+                              y: 170
                               width: 48
                               height: 48
                               bg_color: 0x527FD6
                               on_click:
-                                - homeassistant.action:
-                                    action: button.press
-                                    data:
-                                      entity_id: !lambda |-
-                                        if (id(garage_next_stop).state) return std::string("${garage_stop_button}");
-                                        if (id(garage_next_down).state) return std::string("${garage_down_button}");
-                                        return std::string("${garage_up_button}");
+                                - if:
+                                    condition:
+                                      binary_sensor.is_on: garage_next_stop
+                                    then:
+                                      - script.execute: garage_press
+                                    else:
+                                      - script.execute:
+                                          id: security_confirm_show
+                                          action: 3
+                                          question: !lambda |-
+                                            return std::string(id(garage_next_down).state ? "Close the garage roller door?"
+                                                                                          : "Open the garage roller door?");
                               widgets:
                                 - label:
                                     id: garage_btn_icon
@@ -2717,6 +2723,72 @@ lvgl:
                                     text: "\U000F0737"
                                     text_font: font_mdi_24
                                     text_color: 0xFFFFFF
+
+        # Confirmation for an unlock or a roller door move: dims the page and
+        # blocks taps behind it. security_confirm_show sets the question and
+        # the pending action; Confirm runs it (security_confirm_run).
+        # Declared last so it sits on top of the cards.
+        - obj:
+            id: security_confirm
+            align: CENTER
+            width: 1280
+            height: 800
+            radius: 0
+            border_width: 0
+            bg_color: 0x000000
+            bg_opa: 70%
+            clickable: true
+            scrollable: false
+            hidden: true
+            widgets:
+              - obj:
+                  align: CENTER
+                  width: 520
+                  height: 240
+                  radius: 14
+                  bg_color: 0x151D2B
+                  border_color: 0x2A3546
+                  border_width: 1
+                  scrollable: false
+                  widgets:
+                    - label:
+                        id: security_confirm_label
+                        align: TOP_MID
+                        y: 40
+                        width: 460
+                        text: ""
+                        text_align: CENTER
+                        text_font: font_ui_medium
+                        text_color: 0xFFFFFF
+                    - button:
+                        align: BOTTOM_LEFT
+                        x: 30
+                        y: -24
+                        width: 200
+                        height: 56
+                        radius: 12
+                        border_width: 0
+                        shadow_width: 0
+                        bg_color: 0x202B3B
+                        on_click:
+                          - lvgl.widget.hide: security_confirm
+                        widgets:
+                          - label: {align: CENTER, text: "Cancel", text_font: font_body, text_color: 0xFFFFFF}
+                    - button:
+                        align: BOTTOM_RIGHT
+                        x: -30
+                        y: -24
+                        width: 200
+                        height: 56
+                        radius: 12
+                        border_width: 0
+                        shadow_width: 0
+                        bg_color: 0xD97706
+                        on_click:
+                          - lvgl.widget.hide: security_confirm
+                          - script.execute: security_confirm_run
+                        widgets:
+                          - label: {align: CENTER, text: "Confirm", text_font: font_body, text_color: 0xFFFFFF}
 
     # ==================================================================
     # ENERGY: electricity use (more cards can follow)
@@ -4595,6 +4667,13 @@ globals:
     restore_value: false
     initial_value: "NAN"
 
+  # Security page action waiting for Confirm: 1 unlock front door, 2 unlock
+  # garage door, 3 roller door button (0 = none).
+  - id: security_confirm_action
+    type: int
+    restore_value: false
+    initial_value: "0"
+
 script:
   # Media card: read the selected player's state from HA's REST API
   # (/api/states/<entity>). Only the attributes the card uses are kept.
@@ -5607,6 +5686,59 @@ script:
           lv_label_set_text(id(garage_btn_icon), icon);
           lv_obj_set_style_bg_color(id(garage_btn), lv_color_hex(color), LV_PART_MAIN);
 
+  # Presses the roller door controller's next action (Up / Stop / Down).
+  - id: garage_press
+    then:
+      - homeassistant.action:
+          action: button.press
+          data:
+            entity_id: !lambda |-
+              if (id(garage_next_stop).state) return std::string("${garage_stop_button}");
+              if (id(garage_next_down).state) return std::string("${garage_down_button}");
+              return std::string("${garage_up_button}");
+
+  # Security page confirmation: show the question, remember the action.
+  - id: security_confirm_show
+    parameters:
+      action: int
+      question: string
+    then:
+      - globals.set:
+          id: security_confirm_action
+          value: !lambda 'return action;'
+      - lvgl.label.update:
+          id: security_confirm_label
+          text: !lambda 'return question;'
+      - lvgl.widget.show: security_confirm
+
+  # Confirm pressed: run the pending action.
+  - id: security_confirm_run
+    then:
+      - if:
+          condition:
+            lambda: return id(security_confirm_action) == 1;
+          then:
+            - homeassistant.action:
+                action: lock.unlock
+                data:
+                  entity_id: ${front_lock_entity}
+      - if:
+          condition:
+            lambda: return id(security_confirm_action) == 2;
+          then:
+            - homeassistant.action:
+                action: lock.unlock
+                data:
+                  entity_id: ${garage_lock_entity}
+      - if:
+          condition:
+            lambda: return id(security_confirm_action) == 3;
+          then:
+            - script.execute: garage_press
+      - globals.set:
+          id: security_confirm_action
+          value: "0"
+
   # Backlight: the chosen Screen Brightness on touch/activity, dimmed to 60 %
   # of it after the "Dim screen after" time, then 20 % of it 2 minutes later.
   - id: backlight_timer
@@ -5646,6 +5778,7 @@ script:
                   lambda: 'return id(phone).is_idle() && !id(home_page)->is_showing();'
                 then:
                   - lvgl.widget.hide: reboot_confirm
+                  - lvgl.widget.hide: security_confirm
                   - lvgl.page.show:
                       id: home_page
                       animation: FADE_IN
