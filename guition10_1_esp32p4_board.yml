@@ -734,7 +734,7 @@ touchscreen:
 font:
   - file:
       type: gfonts
-      family: Noto Sans
+      family: Roboto
       weight: 700
     id: font_title
     bpp: 4             # anti-aliased (default 1 bpp is jagged)
@@ -743,7 +743,7 @@ font:
 
   - file:
       type: gfonts
-      family: Noto Sans
+      family: Roboto
       weight: 400
     id: font_body
     bpp: 4             # anti-aliased (default 1 bpp is jagged)
@@ -752,7 +752,7 @@ font:
 
   - file:
       type: gfonts
-      family: Noto Sans
+      family: Roboto
       weight: 400
     id: font_small
     bpp: 4             # anti-aliased (default 1 bpp is jagged)
@@ -760,7 +760,7 @@ font:
     glyphsets: [GF_Latin_Core]
   - file:
       type: gfonts
-      family: Noto Sans
+      family: Roboto
       weight: 500
     id: font_small_18
     bpp: 4             # anti-aliased (default 1 bpp is jagged)
@@ -768,14 +768,14 @@ font:
     glyphsets: [GF_Latin_Core]
   - file:
       type: gfonts
-      family: Noto Sans
+      family: Roboto
       weight: 500
     id: font_ui_medium
     bpp: 4             # anti-aliased (default 1 bpp is jagged)
     size: 24
     glyphsets: [GF_Latin_Core]
 
-  # Media card title / artist / album: local HP Simplified Hans font with
+  # Media card title / artist : local HP Simplified Hans font with
   # Latin plus the Chinese characters in the song library (about 740). A
   # character not listed here shows as blank, so add new ones as songs need
   # them (no duplicates).
@@ -799,7 +799,7 @@ font:
 
   - file:
       type: gfonts
-      family: Noto Sans
+      family: Roboto
       weight: 600
     id: font_clock_big
     bpp: 4             # anti-aliased (default 1 bpp is jagged)
@@ -809,7 +809,7 @@ font:
   # Gas heater card: current and target temperature (digits and degree only).
   - file:
       type: gfonts
-      family: Noto Sans
+      family: Roboto
       weight: 600
     id: font_temp_big
     bpp: 4             # anti-aliased (default 1 bpp is jagged)
@@ -856,7 +856,6 @@ font:
       - "\U000F072E"  # arrow-down-bold (garage button)
       - "\U000F04AE"  # skip-previous (Media card)
       - "\U000F04AD"  # skip-next (Media card)
-      - "\U000F040A"  # play (sidebar Media tab)
       - "\U000F057E"  # volume-high (Media card volume)
       - "\U000F0374"  # minus (heater target)
       - "\U000F0415"  # plus (heater target)
@@ -902,6 +901,8 @@ font:
       - "\U000F0210"  # fan (heater Fan)
       - "\U000F0374"  # minus (heater target)
       - "\U000F0415"  # plus (heater target)
+      - "\U000F0333"  # music-box-multiple (sidebar Media tab)
+      - "\U000F0493"  # cog (sidebar Settings tab)
 
 # Card photos, from this repo's images/ folder (transparent PNG backgrounds).
 # resize keeps the aspect ratio and fits inside the given box.
@@ -915,7 +916,7 @@ image:
     transparency: alpha_channel
     byte_order: little_endian
   - platform: file
-    file: ${images_base}home_wallpaper.jpg?v=4
+    file: ${images_base}home_wallpaper.png?v=5
     id: img_home_wallpaper
     resize: 1280x800
     type: RGB565
@@ -984,7 +985,7 @@ image:
     url: ${ha_base_url}/
     format: JPEG
     type: RGB565
-    resize: 120x120
+    resize: 360x360
     update_interval: never
     buffer_size: 65536
     on_download_finished:
@@ -1324,8 +1325,7 @@ lvgl:
                   bg_color: 0x4F7FE8
                   border_color: 0x82A5FF
                   widgets:
-                    - label: {align: TOP_MID, y: 14, text: "\U000F02DC", text_font: font_mdi_24, text_color: 0xFFFFFF}
-                    - label: {align: BOTTOM_MID, y: -2, text: "Home", text_font: font_small}
+                    - label: {align: CENTER, text: "\U000F02DC", text_font: font_mdi_36, text_color: 0xFFFFFF}   # Home: white on the active tile
               - button:
                   id: nav_cameras_btn
                   styles: scene_btn
@@ -1337,8 +1337,7 @@ lvgl:
                         animation: MOVE_LEFT
                         time: 250ms
                   widgets:
-                    - label: {align: TOP_MID, y: 14, text: "\U000F07DE", text_font: font_mdi_24, text_color: 0xE8EDF5}
-                    - label: {align: BOTTOM_MID, y: -2, text: "Cameras", text_font: font_small}
+                    - label: {align: CENTER, text: "\U000F07DE", text_font: font_mdi_36, text_color: 0x008080}   # Cameras: teal
               - button:
                   id: nav_security_btn
                   styles: scene_btn
@@ -1350,8 +1349,7 @@ lvgl:
                         animation: MOVE_LEFT
                         time: 250ms
                   widgets:
-                    - label: {align: TOP_MID, y: 14, text: "\U000F033E", text_font: font_mdi_24, text_color: 0xE8EDF5}
-                    - label: {align: BOTTOM_MID, y: -2, text: "Security", text_font: font_small}
+                    - label: {align: CENTER, text: "\U000F033E", text_font: font_mdi_36, text_color: 0xE48629}   # Security: rgb(228,134,41)
               - button:
                   id: nav_energy_btn
                   styles: scene_btn
@@ -1363,8 +1361,7 @@ lvgl:
                         animation: MOVE_LEFT
                         time: 250ms
                   widgets:
-                    - label: {align: TOP_MID, y: 14, text: "\U000F0241", text_font: font_mdi_24, text_color: 0xE8EDF5}
-                    - label: {align: BOTTOM_MID, y: -2, text: "Energy", text_font: font_small}
+                    - label: {align: CENTER, text: "\U000F0241", text_font: font_mdi_36, text_color: 0x518C43}   # Energy: rgb(81,140,67)
               - button:
                   id: nav_media_btn
                   styles: scene_btn
@@ -1376,8 +1373,7 @@ lvgl:
                         animation: MOVE_LEFT
                         time: 250ms
                   widgets:
-                    - label: {align: TOP_MID, y: 14, text: "\U000F040A", text_font: font_mdi_24, text_color: 0xE8EDF5}
-                    - label: {align: BOTTOM_MID, y: -2, text: "Media", text_font: font_small}
+                    - label: {align: CENTER, text: "\U000F0333", text_font: font_mdi_36, text_color: 0x0D47A1}   # Media: rgb(13,71,161)
               - button:
                   id: nav_intercom_btn
                   styles: scene_btn
@@ -1389,8 +1385,7 @@ lvgl:
                         animation: MOVE_LEFT
                         time: 250ms
                   widgets:
-                    - label: {align: TOP_MID, y: 14, text: "\U000F0869", text_font: font_mdi_24, text_color: 0xE8EDF5}
-                    - label: {align: BOTTOM_MID, y: -2, text: "Intercom", text_font: font_small}
+                    - label: {align: CENTER, text: "\U000F0869", text_font: font_mdi_36, text_color: 0x5A87FA}   # Intercom: rgb(90,135,250)
               - button:
                   id: nav_settings_btn
                   styles: scene_btn
@@ -1402,8 +1397,7 @@ lvgl:
                         animation: MOVE_TOP
                         time: 250ms
                   widgets:
-                    - label: {align: TOP_MID, y: 14, text: "\U000F0493", text_font: font_mdi_24, text_color: 0xE8EDF5}
-                    - label: {align: BOTTOM_MID, y: -2, text: "Settings", text_font: font_small}
+                    - label: {align: CENTER, text: "\U000F0493", text_font: font_mdi_36, text_color: 0xA020F0}   # Settings: rgb(160,32,240)
 
         # =====================================================================
         # 1. DIGITAL CLOCK col 1 span 5 | row 1
@@ -2980,16 +2974,18 @@ lvgl:
             scrollable: false
             layout:
               type: grid
-              grid_rows: [FR(1), FR(1), FR(1)]
-              grid_columns: [FR(1), FR(1), FR(1)]
+              grid_rows: [FR(1)]
+              grid_columns: [FR(1), FR(1)]
               pad_row: 0
               pad_column: 0
             widgets:
               # =====================================================================
-              # 7. MEDIA PLAYER                    col 9 span 4 | row 6 span 6
+              # 7. MEDIA PLAYER: left half of the page (card about 624x716)
               # The player named in ${media_player_select_entity}. media_poll reads
-              # its state from HA every 3 s while the home page is shown;
+              # its state from HA every 3 s while this page is shown;
               # media_draw / media_tick fill the widgets.
+              # Top to bottom: 360 px album art, title, artist, progress bar with
+              # times, prev / play / next, volume.
               # =====================================================================
               - obj:
                   styles: cell_style
@@ -3017,11 +3013,11 @@ lvgl:
                           # Album art, with a vinyl record behind it for when there
                           # is no (JPEG) art.
                           - obj:
-                              x: 16
-                              y: 16
-                              width: 120
-                              height: 120
-                              radius: 14
+                              align: TOP_MID
+                              y: 32
+                              width: 360
+                              height: 360
+                              radius: 20
                               bg_color: 0x1B2A55
                               bg_grad_color: 0x121A30
                               bg_grad_dir: VER
@@ -3033,9 +3029,9 @@ lvgl:
                               widgets:
                                 - obj:
                                     align: CENTER
-                                    width: 104
-                                    height: 104
-                                    radius: 52
+                                    width: 312
+                                    height: 312
+                                    radius: 156
                                     bg_color: 0x2563EB
                                     bg_grad_color: 0x9333EA
                                     bg_grad_dir: VER
@@ -3044,9 +3040,9 @@ lvgl:
                                     scrollable: false
                                 - obj:      # groove ring
                                     align: CENTER
-                                    width: 70
-                                    height: 70
-                                    radius: 35
+                                    width: 210
+                                    height: 210
+                                    radius: 105
                                     bg_opa: TRANSP
                                     border_color: 0x93C5FD
                                     border_opa: 40%
@@ -3054,18 +3050,18 @@ lvgl:
                                     scrollable: false
                                 - obj:      # label
                                     align: CENTER
-                                    width: 36
-                                    height: 36
-                                    radius: 18
+                                    width: 108
+                                    height: 108
+                                    radius: 54
                                     bg_color: 0x1E2A44
                                     border_color: 0x0F172A
                                     border_width: 2
                                     scrollable: false
                                 - obj:      # spindle hole
                                     align: CENTER
-                                    width: 8
-                                    height: 8
-                                    radius: 4
+                                    width: 20
+                                    height: 20
+                                    radius: 10
                                     bg_color: 0x0B1018
                                     border_width: 0
                                 - image:
@@ -3073,89 +3069,40 @@ lvgl:
                                     src: media_art_img
                                     align: CENTER
                                     hidden: true
-                          # Title / artist / album all use music_title_font (22 px,
-                          # with Chinese); colour sets them apart.
+                          # Title / artist use music_title_font (22 px, with
+                          # Chinese); colour sets them apart. One line each, fixed
+                          # height: a long title scrolls sideways instead of
+                          # wrapping onto the artist line.
                           - label:
                               id: media_title_label
-                              x: 150
-                              y: 14
-                              width: 216
+                              align: TOP_MID
+                              y: 412
+                              width: 560
+                              height: 30
                               text: "Nothing playing"
                               text_font: music_title_font
                               text_color: 0xFFFFFF
-                              long_mode: DOT
+                              text_align: CENTER
+                              long_mode: SCROLL_CIRCULAR
                           - label:
                               id: media_artist_label
-                              x: 150
-                              y: 46
-                              width: 216
+                              align: TOP_MID
+                              y: 448
+                              width: 560
+                              height: 30
                               text: ""
                               text_font: music_title_font
                               text_color: 0x9DB4FF
+                              text_align: CENTER
                               long_mode: DOT
-                          - label:
-                              id: media_album_label
-                              x: 150
-                              y: 76
-                              width: 216
-                              text: ""
-                              text_font: music_title_font
-                              text_color: 0x7183A8
-                              long_mode: DOT
-                          # Volume: speaker icon and a horizontal slider under
-                          # the album line (same size as the progress bar).
-                          # Release sets the player volume.
-                          - label:
-                              x: 150
-                              y: 102
-                              text: "\U000F057E"      # volume-high
-                              text_font: font_mdi_24
-                              text_color: 0x9DB4FF
-                          - slider:
-                              id: media_volume_slider
-                              x: 182
-                              y: 111
-                              width: 208
-                              height: 6
-                              min_value: 0
-                              max_value: 100
-                              value: 0
-                              bg_color: 0x2A3550
-                              bg_opa: COVER
-                              radius: 3
-                              indicator:
-                                bg_color: 0x3B82F6
-                                bg_grad_color: 0xC4B5FD
-                                bg_grad_dir: HOR
-                                radius: 3
-                              knob:
-                                bg_color: 0xFFFFFF
-                                pad_all: 3
-                                radius: 100
-                              on_release:
-                                - if:
-                                    condition:
-                                      lambda: return id(media_entity).state.rfind("media_player.", 0) == 0;
-                                    then:
-                                      - lambda: id(media_volume) = x / 100.0f;
-                                      - homeassistant.action:
-                                          action: media_player.volume_set
-                                          data:
-                                            entity_id: !lambda 'return id(media_entity).state;'
-                                            volume_level: !lambda |-
-                                              char buf[8];
-                                              snprintf(buf, sizeof(buf), "%.2f", id(media_volume));
-                                              return std::string(buf);
-                          # Progress along the bottom of the card, from the left
-                          # edge of the album art (x 16) to the right end of the
-                          # volume bar (x 390); elapsed / duration sit above its
-                          # two ends. Drag and release to seek.
+                          # Progress bar (x 32-592, the same span as the volume
+                          # bar), elapsed / duration under its two ends. Drag and
+                          # release to seek.
                           - slider:
                               id: media_seek_slider
-                              align: BOTTOM_LEFT
-                              x: 16
-                              y: -18
-                              width: 374
+                              x: 32
+                              y: 500
+                              width: 560
                               height: 6
                               min_value: 0
                               max_value: 1000
@@ -3170,7 +3117,7 @@ lvgl:
                                 radius: 3
                               knob:
                                 bg_color: 0xFFFFFF
-                                pad_all: 3
+                                pad_all: 4
                                 radius: 100
                               on_release:
                                 - if:
@@ -3193,33 +3140,31 @@ lvgl:
                                       - script.execute: media_tick
                           - label:
                               id: media_elapsed_label
-                              align: BOTTOM_LEFT
-                              x: 16
-                              y: -30
-                              width: 64
+                              x: 32
+                              y: 516
+                              width: 80
                               text: "--:--"
                               text_align: LEFT
                               text_font: font_small
                               text_color: 0x9DB4FF
                           - label:
                               id: media_duration_label
-                              align: BOTTOM_LEFT
-                              x: 326
-                              y: -30
-                              width: 64
+                              x: 512
+                              y: 516
+                              width: 80
                               text: "--:--"
                               text_align: RIGHT
                               text_font: font_small
                               text_color: 0x9DB4FF
-                          # Controls between the volume row and the progress bar.
+                          # Controls, centred under the progress bar.
                           - button:
                               id: media_prev_btn
                               styles: round_btn
                               align: TOP_MID
-                              x: -84
-                              y: 142
-                              width: 48
-                              height: 48
+                              x: -112
+                              y: 566
+                              width: 64
+                              height: 64
                               bg_color: 0x1A2333
                               border_color: 0x2F3B52
                               border_width: 1
@@ -3228,20 +3173,20 @@ lvgl:
                                     id: media_command
                                     service: media_player.media_previous_track
                               widgets:
-                                - label: {align: CENTER, text: "\U000F04AE", text_font: font_mdi_24, text_color: 0xFFFFFF}
+                                - label: {align: CENTER, text: "\U000F04AE", text_font: font_mdi_36, text_color: 0xFFFFFF}
                           # Play / pause: glowing blue-purple ring like the mockup.
                           - button:
                               id: media_play_btn
                               styles: round_btn
                               align: TOP_MID
-                              y: 136
-                              width: 60
-                              height: 60
+                              y: 556
+                              width: 84
+                              height: 84
                               bg_color: 0x141B2B
                               border_color: 0x8B7CF6
                               border_width: 3
                               shadow_color: 0x6366F1
-                              shadow_width: 16
+                              shadow_width: 20
                               shadow_opa: 50%
                               on_click:
                                 - if:
@@ -3275,10 +3220,10 @@ lvgl:
                               id: media_next_btn
                               styles: round_btn
                               align: TOP_MID
-                              x: 84
-                              y: 142
-                              width: 48
-                              height: 48
+                              x: 112
+                              y: 566
+                              width: 64
+                              height: 64
                               bg_color: 0x1A2333
                               border_color: 0x2F3B52
                               border_width: 1
@@ -3287,7 +3232,51 @@ lvgl:
                                     id: media_command
                                     service: media_player.media_next_track
                               widgets:
-                                - label: {align: CENTER, text: "\U000F04AD", text_font: font_mdi_24, text_color: 0xFFFFFF}
+                                - label: {align: CENTER, text: "\U000F04AD", text_font: font_mdi_36, text_color: 0xFFFFFF}
+                          # Volume along the bottom: speaker icon and a slider
+                          # ending with the progress bar (x 592). Release sets
+                          # the player volume.
+                          - label:
+                              x: 32
+                              y: 664
+                              text: "\U000F057E"      # volume-high
+                              text_font: font_mdi_24
+                              text_color: 0x9DB4FF
+                          - slider:
+                              id: media_volume_slider
+                              x: 68
+                              y: 673
+                              width: 524
+                              height: 6
+                              min_value: 0
+                              max_value: 100
+                              value: 0
+                              bg_color: 0x2A3550
+                              bg_opa: COVER
+                              radius: 3
+                              indicator:
+                                bg_color: 0x3B82F6
+                                bg_grad_color: 0xC4B5FD
+                                bg_grad_dir: HOR
+                                radius: 3
+                              knob:
+                                bg_color: 0xFFFFFF
+                                pad_all: 4
+                                radius: 100
+                              on_release:
+                                - if:
+                                    condition:
+                                      lambda: return id(media_entity).state.rfind("media_player.", 0) == 0;
+                                    then:
+                                      - lambda: id(media_volume) = x / 100.0f;
+                                      - homeassistant.action:
+                                          action: media_player.volume_set
+                                          data:
+                                            entity_id: !lambda 'return id(media_entity).state;'
+                                            volume_level: !lambda |-
+                                              char buf[8];
+                                              snprintf(buf, sizeof(buf), "%.2f", id(media_volume));
+                                              return std::string(buf);
 
 
     # ==================================================================
@@ -4580,10 +4569,6 @@ globals:
     type: std::string
     restore_value: false
     initial_value: '""'
-  - id: media_album
-    type: std::string
-    restore_value: false
-    initial_value: '""'
   - id: media_name
     type: std::string
     restore_value: false
@@ -4653,7 +4638,6 @@ script:
                         id(media_state) = doc["state"] | "";
                         id(media_title) = a["media_title"] | "";
                         id(media_artist) = a["media_artist"] | "";
-                        id(media_album) = a["media_album_name"] | "";
                         id(media_name) = a["friendly_name"] | "";
                         id(media_duration) = a["media_duration"] | 0.0f;
                         id(media_pos) = a["media_position"] | 0.0f;
@@ -4689,27 +4673,26 @@ script:
                       tag: media
                       format: "Media player state request failed"
 
-  # Media card: title, artist, album and the play / pause icon.
+  # Media card: title, artist and the play / pause icon.
   - id: media_draw
     then:
       - lambda: |-
           const std::string &st = id(media_state);
           const bool valid = id(media_entity).state.rfind("media_player.", 0) == 0;
           const bool active = st == "playing" || st == "paused" || st == "buffering";
-          std::string title = id(media_title), artist = id(media_artist), album = id(media_album);
+          std::string title = id(media_title), artist = id(media_artist);
           if (!valid) {
             title = "No player";
             artist = "Set ${media_player_select_entity}";
-            album = "";
+        
           } else if (!active || title.empty()) {
             title = "Nothing playing";
             artist = id(media_name);
-            album = st;
-            if (!album.empty()) album[0] = toupper(album[0]);
+            
           }
           lv_label_set_text(id(media_title_label), title.c_str());
           lv_label_set_text(id(media_artist_label), artist.c_str());
-          lv_label_set_text(id(media_album_label), album.c_str());
+
           lv_label_set_text(id(media_play_icon), st == "playing" ? "\U000F03E4" : "\U000F040A");
       - script.execute: media_tick
 
@@ -6071,7 +6054,7 @@ text_sensor:
     internal: true
     on_value:
       - lambda: |-
-          id(media_state) = id(media_title) = id(media_artist) = id(media_album) = id(media_name) = "";
+          id(media_state) = id(media_title) = id(media_artist) = id(media_name) = "";
           id(media_picture) = "";
           id(media_duration) = id(media_pos) = 0;
           id(media_pos_at) = 0;
