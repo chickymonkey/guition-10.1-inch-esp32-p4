@@ -137,6 +137,9 @@ substitutions:
   # read from HA's REST API, which needs a long-lived access token (HA profile
   # > Security) in secrets.yaml as ha_token.
   media_player_select_entity: input_text.living_room_player
+  # Music Assistant playlist started by the play button when the player has
+  # nothing loaded (shuffled, replacing the empty queue).
+  media_default_playlist: "Every Songs"
   ha_token: !secret ha_token
 
 # Shared packages: P4 base/hosted Wi-Fi, VoIP transport and settings, JPEG
@@ -636,7 +639,7 @@ voip_stack:
         id: call_ringing_out_status_label
         text: "CALLING"
     - script.execute: backlight_timer
-    - script.execute: update_call_tile
+    - script.execute: show_phone_page      # Intercom page (e.g. a call from the boot button)
 
   on_dest_ringing:
     - lambda: id(peer_name) = peer;
@@ -760,6 +763,18 @@ font:
     size: 24
     glyphsets: [GF_Latin_Core]
 
+  # Media card title / artist / album: local HP Simplified Hans font with
+  # Latin plus the Chinese characters in the song library (about 740). A
+  # character not listed here shows as blank, so add new ones as songs need
+  # them (no duplicates).
+  - file: "/config/esphome/font/hpsimplifiedhans-regular.ttf"
+    id: music_title_font
+    bpp: 4             # anti-aliased, as the other fonts (1 bpp is ~4x smaller)
+    size: 22
+    glyphs:
+      - " []()+=,-_.:!@*{}`|°~&'?/#0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+      - "。，“”王力宏花田错歌之海枯石烂一直很安静路上有你首简单的下沙游鸿明不要对他说张信哲中国话为写诗亚瑟小子爱我莫文蔚传奇在知道事是心内承诺背包仰倔强别怕伤十年陈奕迅吴克群残废周华健没会让想起因情墨尔本晴夜曲杰伦大城太早孤勇者宽容富士山就陶喆屋顶布兰妮英版美少女祈祷希望广岛恋庐州月许嵩真学友碎了无痕和去吹风敬轩吻得逼韶涵亲那彩虹天堂往後余生貳浪徐誉滕使翅膀跳忠孝东走九遍快乐崇拜忽然间多后悔配们好都样麦受手放开拥抱拯救改变自己断点赖曹格叛李圣痴绝楼个人江南林俊么清雨温柔五雪演员薛谦如潮水转移独家记忆唯场戏梦存以活男洋白光足突等分钟红玫瑰老与落叶归根蓝色解脱谎贾斯汀越纯幸福过火遇见孙燕姿什浮夸绮贞旅行意义丽镇姑娘找暗蝴蝶晶莹委屈预感黑柳丁龙能秘密吗亭序园时机第七章最长电影枫烟圈易冷甜祝日稻香给蒲公约定呢超飞跨代整青瓷毛衣做两森难依舍罪当忘卡片钥匙动求留用疼些音阴抗拒颜迈逊冰万练习缠绵千理由毒珍贵偷別她来听唱果这算刀割到书儿也谢呼吸痛气可惜三星杜伟跟辈杨嬅瓶座柴盐酱醋茶梁咏琪价孟婆汤灰象葬礼滴泪素煌袁惟仁醒旭浆条退春瘤菌团荆棘鱼眼豆齐井庾澄庆泥地出而看发成只把还作种总从面但现前所同又方期它头经位名法世次身被高已其进此常正问几特外孩相西将实向声车全重工物每并打新比才便夫再部像体却加主界门利表先口死性马或住教命结更拉神处母父应字平报关至认接告入笑军候民岁何度觉带边叫任金原吃妈通师立数四失满战远轻目病始达深完今提化空业思切怎非罗钱语元喜曾离科干流欢各即指合反题必该论交终请医晚制球决画保读运及则房院量苦品近坐产答精视连司巴管类未朋且婚台北队久乎观尽形爸百令吧识步术市半热送兴造谈极随收讲式取照办古拿计您装似双妻尼诉米称客领节站刻统故历惊脸选紧争另建维树系示愿持史准联妇纪基买志阿"
+
   - file: "https://raw.githubusercontent.com/Templarian/MaterialDesign-Webfont/master/fonts/materialdesignicons-webfont.ttf"
     id: font_action_icon
     bpp: 4             # anti-aliased (default 1 bpp is jagged)
@@ -776,8 +791,18 @@ font:
       weight: 600
     id: font_clock_big
     bpp: 4             # anti-aliased (default 1 bpp is jagged)
-    size: 110
+    size: 150          # sized for the wider clock card
     glyphs: "0123456789:-"
+
+  # Gas heater card: current and target temperature (digits and degree only).
+  - file:
+      type: gfonts
+      family: Noto Sans
+      weight: 600
+    id: font_temp_big
+    bpp: 4             # anti-aliased (default 1 bpp is jagged)
+    size: 40
+    glyphs: "0123456789.-°"
 
   - file: "https://raw.githubusercontent.com/Templarian/MaterialDesign-Webfont/master/fonts/materialdesignicons-webfont.ttf"
     id: font_mdi_24
@@ -819,6 +844,7 @@ font:
       - "\U000F072E"  # arrow-down-bold (garage button)
       - "\U000F04AE"  # skip-previous (Media card)
       - "\U000F04AD"  # skip-next (Media card)
+      - "\U000F040A"  # play (sidebar Media tab)
       - "\U000F0374"  # minus (heater target)
       - "\U000F0415"  # plus (heater target)
       - "\U000F0717"  # snowflake (heater Cool)
@@ -859,6 +885,10 @@ font:
       - "\U000F03E4"  # pause (Media card)
       - "\U000F04AE"  # skip-previous (Media card)
       - "\U000F04AD"  # skip-next (Media card)
+      - "\U000F0717"  # snowflake (heater Cool)
+      - "\U000F0210"  # fan (heater Fan)
+      - "\U000F0374"  # minus (heater target)
+      - "\U000F0415"  # plus (heater target)
 
 # Card photos, from this repo's images/ folder (transparent PNG backgrounds).
 # resize keeps the aspect ratio and fits inside the given box.
@@ -884,16 +914,6 @@ image:
     file: ${images_base}floorlamp.png?v=4
     id: img_floor_lamp
     resize: 81x182
-    type: RGB565
-    transparency: alpha_channel
-    byte_order: little_endian
-  # Intercom card door-station photo, fitted to the 130x174 slot. Save PNGs
-  # without metadata: ESPHome treats a file with "<svg" in its first 1 KB as
-  # an SVG and fails with "not valid UTF-8".
-  - platform: file
-    file: ${images_base}intercom_panel.png?v=2
-    id: img_intercom_panel
-    resize: 130x174
     type: RGB565
     transparency: alpha_channel
     byte_order: little_endian
@@ -1047,8 +1067,8 @@ lvgl:
     # Gas heater Heat / Cool / Fan segment, unselected (Heat and Fan add a
     # blue-violet fill in their "checked:" block).
     - id: heater_mode_btn
-      width: 58
-      height: 52
+      width: 112
+      height: 110
       radius: 12
       pad_all: 0
       bg_opa: TRANSP
@@ -1080,7 +1100,7 @@ lvgl:
     # each tile's "checked:" block.
     - id: light_tile
       width: 75
-      height: 162
+      height: 202
       radius: 12
       pad_all: 0
       bg_color: 0x2A2F38
@@ -1111,20 +1131,14 @@ lvgl:
       bg_color: 0x667386
       bg_grad_color: 0x414D60
       bg_grad_dir: VER
-
   pages:
     - id: home_page
-      # 18 rows x 13 columns of equal size. Written out in full (not "18x13")
-      # because pad_row/pad_column are only accepted inside layout:.
+      # 4 rows x 13 columns. Row heights are in pixels (FR weights summing to
+      # 800): top status bar 44, top cards 396, bottom cards 300, bottom
+      # margin 60. Column 0 is the sidebar; each card column is ~98 px.
       layout:
         type: grid
-        # Row weights are in 1/60 of a base row: rows 1-5 (clock row) are 66 so
-        # that row is half a base row taller; rows 6-11 (intercom row) are 55 so
-        # it is half a base row shorter. Rows 12-16 (cameras and scenes) are 70
-        # so the camera tiles fit a whole square snapshot; row 17 shrinks to a
-        # small bottom margin to pay for it. Total stays 1080 (= 800 px).
-        grid_rows: [FR(60), FR(66), FR(66), FR(66), FR(66), FR(66), FR(55), FR(55), FR(55),
-                    FR(55), FR(55), FR(55), FR(70), FR(70), FR(70), FR(70), FR(70), FR(10)]
+        grid_rows: [FR(44), FR(396), FR(300), FR(60)]
         grid_columns: [FR(1), FR(1), FR(1), FR(1), FR(1), FR(1), FR(1),
                        FR(1), FR(1), FR(1), FR(1), FR(1), FR(1)]
         pad_row: 0
@@ -1139,11 +1153,12 @@ lvgl:
             id: settings_p4_page
             animation: MOVE_TOP
             time: 250ms
+
       widgets:
         # =====================================================================
         # TEMPERATURE + HUMIDITY (top left, over the clock card)  col 1 span 4
         # Icon + value only. cell_style's 6 px padding lines the first icon up
-        # with the clock card's left edge.
+        # with the card's left edge.
         # =====================================================================
         - obj: #Temperature and humidity status
             styles: cell_style
@@ -1270,7 +1285,7 @@ lvgl:
                   text_color: 0xA7B2C4
 
         # =====================================================================
-        # SIDEBAR                            col 0 span 1 | row 1 span 16
+        # SIDEBAR: one tab per page               col 0 | row 1 span 3
         # =====================================================================
         - obj:
             styles: cell_style
@@ -1278,7 +1293,7 @@ lvgl:
             grid_cell_column_pos: 0
             grid_cell_row_pos: 1
             grid_cell_column_span: 1
-            grid_cell_row_span: 16
+            grid_cell_row_span: 3
             grid_cell_x_align: STRETCH
             grid_cell_y_align: STRETCH
             layout:
@@ -1312,6 +1327,58 @@ lvgl:
                     - label: {align: TOP_MID, y: 14, text: "\U000F07DE", text_font: font_mdi_24, text_color: 0xE8EDF5}
                     - label: {align: BOTTOM_MID, y: -2, text: "Cameras", text_font: font_small}
               - button:
+                  id: nav_security_btn
+                  styles: scene_btn
+                  width: 100%
+                  height: 84
+                  on_click:
+                    - lvgl.page.show:
+                        id: security_page
+                        animation: MOVE_LEFT
+                        time: 250ms
+                  widgets:
+                    - label: {align: TOP_MID, y: 14, text: "\U000F033E", text_font: font_mdi_24, text_color: 0xE8EDF5}
+                    - label: {align: BOTTOM_MID, y: -2, text: "Security", text_font: font_small}
+              - button:
+                  id: nav_energy_btn
+                  styles: scene_btn
+                  width: 100%
+                  height: 84
+                  on_click:
+                    - lvgl.page.show:
+                        id: energy_page
+                        animation: MOVE_LEFT
+                        time: 250ms
+                  widgets:
+                    - label: {align: TOP_MID, y: 14, text: "\U000F0241", text_font: font_mdi_24, text_color: 0xE8EDF5}
+                    - label: {align: BOTTOM_MID, y: -2, text: "Energy", text_font: font_small}
+              - button:
+                  id: nav_media_btn
+                  styles: scene_btn
+                  width: 100%
+                  height: 84
+                  on_click:
+                    - lvgl.page.show:
+                        id: entertainment_page
+                        animation: MOVE_LEFT
+                        time: 250ms
+                  widgets:
+                    - label: {align: TOP_MID, y: 14, text: "\U000F040A", text_font: font_mdi_24, text_color: 0xE8EDF5}
+                    - label: {align: BOTTOM_MID, y: -2, text: "Media", text_font: font_small}
+              - button:
+                  id: nav_intercom_btn
+                  styles: scene_btn
+                  width: 100%
+                  height: 84
+                  on_click:
+                    - lvgl.page.show:
+                        id: intercom_page
+                        animation: MOVE_LEFT
+                        time: 250ms
+                  widgets:
+                    - label: {align: TOP_MID, y: 14, text: "\U000F0869", text_font: font_mdi_24, text_color: 0xE8EDF5}
+                    - label: {align: BOTTOM_MID, y: -2, text: "Intercom", text_font: font_small}
+              - button:
                   id: nav_settings_btn
                   styles: scene_btn
                   width: 100%
@@ -1326,15 +1393,15 @@ lvgl:
                     - label: {align: BOTTOM_MID, y: -2, text: "Settings", text_font: font_small}
 
         # =====================================================================
-        # 1. WALLPAPER / DIGITAL CLOCK       col 1 span 4 | row 1 span 5
+        # 1. DIGITAL CLOCK (same width as Cameras)   col 1 span 5 | row 1
         # =====================================================================
         - obj:
             styles: cell_style
             scrollable: false
             grid_cell_column_pos: 1
             grid_cell_row_pos: 1
-            grid_cell_column_span: 4
-            grid_cell_row_span: 5
+            grid_cell_column_span: 5
+            grid_cell_row_span: 1
             grid_cell_x_align: STRETCH
             grid_cell_y_align: STRETCH
             widgets:
@@ -1357,38 +1424,23 @@ lvgl:
                     - label:
                         id: clock_time_label
                         align: CENTER
-                        y: -18
                         text: "--:--"
                         text_font: font_clock_big
                         text_color: 0xFFFFFF
-                    # Bottom row: day on the left, date (no year) on the right
-                    - label:
-                        id: clock_day_label
-                        align: BOTTOM_LEFT
-                        x: 18
-                        y: -14
-                        text: ""
-                        text_font: font_ui_medium
-                        text_color: 0xFFFFFF
-                    - label:
-                        id: clock_date_label
-                        align: BOTTOM_RIGHT
-                        x: -18
-                        y: -14
-                        text: ""
-                        text_font: font_ui_medium
-                        text_color: 0xD0D9EA
 
         # =====================================================================
-        # 2. GAS HEATER                      col 5 span 4 | row 1 span 5
+        # 2. GAS HEATER (card about 677x384)       col 6 span 7 | row 1
+        # Header (icon, title, status) and the power ring across the top; the
+        # current-temperature ring on the left; target pill and Heat / Cool /
+        # Fan on the right.
         # =====================================================================
         - obj:
             styles: cell_style
             scrollable: false
-            grid_cell_column_pos: 5
+            grid_cell_column_pos: 6
             grid_cell_row_pos: 1
-            grid_cell_column_span: 4
-            grid_cell_row_span: 5
+            grid_cell_column_span: 7
+            grid_cell_row_span: 1
             grid_cell_x_align: STRETCH
             grid_cell_y_align: STRETCH
             widgets:
@@ -1405,56 +1457,117 @@ lvgl:
                   bg_opa: 70%
                   border_color: 0x4A64B8
                   widgets:
+                    # ---- header ----
+                    - obj:          # icon tile
+                        x: 24
+                        y: 22
+                        width: 64
+                        height: 64
+                        radius: 14
+                        bg_color: 0x2A3570
+                        border_color: 0x4A5BB0
+                        border_width: 1
+                        scrollable: false
+                        widgets:
+                          - label: {align: CENTER, text: "\U000F0238", text_font: font_mdi_36, text_color: 0xA5B4FC}
+                    - label:
+                        x: 104
+                        y: 20
+                        text: "Gas Heater"
+                        text_font: font_title
+                        text_color: 0xFFFFFF
+                    - label:
+                        id: heater_status_label
+                        x: 104
+                        y: 60
+                        text: "--"
+                        text_font: font_body
+                        text_color: 0x8DA2E0
+
+                    # ---- power (top right; on = glowing ring) ----
+                    # On (heat or fan): turns both off. Off: turns the heater on.
+                    - button:
+                        id: heater_power_btn
+                        styles: round_btn
+                        align: TOP_RIGHT
+                        x: -24
+                        y: 16
+                        width: 84
+                        height: 84
+                        bg_color: 0x141B2B
+                        border_color: 0x3A4660
+                        border_width: 4
+                        on_click:
+                          - if:
+                              condition:
+                                lambda: return id(heater_power_on).state || id(heater_fan_on).state;
+                              then:
+                                - homeassistant.action:
+                                    action: switch.turn_off
+                                    data:
+                                      entity_id: ${heater_power_switch}
+                                - homeassistant.action:
+                                    action: switch.turn_off
+                                    data:
+                                      entity_id: ${heater_fan_switch}
+                              else:
+                                - homeassistant.action:
+                                    action: switch.turn_on
+                                    data:
+                                      entity_id: ${heater_power_switch}
+                        widgets:
+                          - label: {align: CENTER, text: "\U000F0425", text_font: font_mdi_36, text_color: 0xFFFFFF}
+
                     # ---- left: current temperature ring (living room) ----
                     # Arc range 10-35 degrees; not touchable (clickable: false)
                     # but keeps its knob as the end-of-arc dot.
                     - arc:
                         id: heater_current_arc
-                        x: 16
-                        y: 8
-                        width: 144
-                        height: 144
+                        x: 24
+                        y: 116
+                        width: 240
+                        height: 240
                         min_value: 10
                         max_value: 35
                         value: 10
                         clickable: false
                         arc_color: 0x29364A
-                        arc_width: 8
+                        arc_width: 12
                         indicator:
                           arc_color: 0x6A7BFF
-                          arc_width: 8
+                          arc_width: 12
                         knob:
                           bg_color: 0xE0E7FF
-                          pad_all: 3
+                          pad_all: 4
                     - obj:          # inner disc
-                        x: 36
-                        y: 28
-                        width: 104
-                        height: 104
-                        radius: 52
+                        x: 54
+                        y: 146
+                        width: 180
+                        height: 180
+                        radius: 90
                         bg_color: 0x0F1628
                         border_color: 0x2A3A5E
                         border_width: 1
                         clickable: false
                         scrollable: false
                         widgets:
-                          - label: {align: CENTER, y: -30, text: "Current", text_font: font_small, text_color: 0x9DB4FF}
+                          - label: {align: CENTER, y: -46, text: "Current", text_font: font_body, text_color: 0x9DB4FF}
                           - label:
                               id: heater_current_label
                               align: CENTER
-                              y: 0
+                              y: 2
                               text: "--°"
-                              text_font: font_title
+                              text_font: font_temp_big
                               text_color: 0xFFFFFF
-                          - label: {align: CENTER, y: 30, text: "\U000F050F", text_font: font_mdi_24, text_color: 0x60A5FA}
+                          - label: {align: CENTER, y: 50, text: "\U000F050F", text_font: font_mdi_36, text_color: 0x60A5FA}
 
-                    # ---- left: target pill (- value +) ----
+                    # ---- right: target pill (- value +) ----
                     - obj:
-                        x: 12
-                        y: 164
-                        width: 160
-                        height: 56
-                        radius: 28
+                        x: 300
+                        y: 120
+                        width: 353
+                        height: 96
+                        radius: 48
                         bg_color: 0x151D2B
                         border_color: 0x2F3B52
                         border_width: 1
@@ -1464,92 +1577,58 @@ lvgl:
                           - button:
                               styles: round_btn
                               align: LEFT_MID
-                              x: 5
-                              width: 44
-                              height: 44
+                              x: 12
+                              width: 72
+                              height: 72
                               bg_color: 0x1A2333
                               border_color: 0x2F3B52
                               border_width: 1
                               on_click:
                                 - script.execute: {id: heater_target_step, delta: -1}
                               widgets:
-                                - label: {align: CENTER, text: "\U000F0374", text_font: font_mdi_24, text_color: 0xFFFFFF}
+                                - label: {align: CENTER, text: "\U000F0374", text_font: font_mdi_36, text_color: 0xFFFFFF}
                           - label:
                               id: heater_target_title
                               align: CENTER
-                              y: -11
+                              y: -26
                               text: "Target"
-                              text_font: font_small
+                              text_font: font_body
                               text_color: 0x9DB4FF
                           - label:
                               id: heater_target_label
                               align: CENTER
-                              y: 11
+                              y: 14
                               text: "--°"
-                              text_font: font_ui_medium
+                              text_font: font_temp_big
                               text_color: 0xFFFFFF
                           - button:
                               styles: round_btn
                               align: RIGHT_MID
-                              x: -5
-                              width: 44
-                              height: 44
+                              x: -12
+                              width: 72
+                              height: 72
                               bg_color: 0x1A2333
                               border_color: 0x2F3B52
                               border_width: 1
                               on_click:
                                 - script.execute: {id: heater_target_step, delta: 1}
                               widgets:
-                                - label: {align: CENTER, text: "\U000F0415", text_font: font_mdi_24, text_color: 0xFFFFFF}
-
-                    # ---- right: header ----
-                    - obj:          # icon tile
-                        x: 186
-                        y: 12
-                        width: 44
-                        height: 44
-                        radius: 10
-                        bg_color: 0x2A3570
-                        border_color: 0x4A5BB0
-                        border_width: 1
-                        scrollable: false
-                        widgets:
-                          - label: {align: CENTER, text: "\U000F0238", text_font: font_mdi_24, text_color: 0xA5B4FC}
-                    - label:
-                        x: 242
-                        y: 8
-                        text: "Gas Heater"
-                        text_font: font_body
-                        text_color: 0xFFFFFF
-                    - label:
-                        id: heater_status_label
-                        x: 242
-                        y: 36
-                        text: "--"
-                        text_font: font_small
-                        text_color: 0x8DA2E0
-                    - obj:          # divider
-                        x: 186
-                        y: 66
-                        width: 184
-                        height: 1
-                        bg_color: 0x2F3B52
-                        border_width: 0
+                                - label: {align: CENTER, text: "\U000F0415", text_font: font_mdi_36, text_color: 0xFFFFFF}
 
                     # ---- right: Heat / Cool / Fan ----
                     # Heat = heater on, Fan = circulation fan on (Rinnai Touch
                     # switches), Cool = one press of the evaporative cooler
                     # relay (it toggles the cooler, so it has no on state).
                     - obj:
-                        x: 186
-                        y: 76
-                        width: 184
-                        height: 60
-                        radius: 16
+                        x: 300
+                        y: 232
+                        width: 353
+                        height: 124
+                        radius: 20
                         bg_color: 0x151D2B
                         border_color: 0x2F3B52
                         border_width: 1
-                        pad_all: 4
+                        pad_all: 6
                         scrollable: false
                         layout:
                           type: flex
@@ -1575,16 +1654,16 @@ lvgl:
                                     data:
                                       entity_id: ${heater_power_switch}
                               widgets:
-                                - label: {align: TOP_MID, y: 4, text: "\U000F0238", text_font: font_mdi_24}
-                                - label: {align: BOTTOM_MID, y: -2, text: "Heat", text_font: font_small}
+                                - label: {align: TOP_MID, y: 16, text: "\U000F0238", text_font: font_mdi_36}
+                                - label: {align: BOTTOM_MID, y: -14, text: "Heat", text_font: font_body}
                           - button:
                               id: heater_btn_cool
                               styles: heater_mode_btn
                               on_click:
                                 - script.execute: cooler_press
                               widgets:
-                                - label: {align: TOP_MID, y: 4, text: "\U000F0717", text_font: font_mdi_24}
-                                - label: {align: BOTTOM_MID, y: -2, text: "Cool", text_font: font_small}
+                                - label: {align: TOP_MID, y: 16, text: "\U000F0717", text_font: font_mdi_36}
+                                - label: {align: BOTTOM_MID, y: -14, text: "Cool", text_font: font_body}
                           - button:
                               id: heater_btn_fan
                               styles: heater_mode_btn
@@ -1602,1222 +1681,19 @@ lvgl:
                                     data:
                                       entity_id: ${heater_fan_switch}
                               widgets:
-                                - label: {align: TOP_MID, y: 4, text: "\U000F0210", text_font: font_mdi_24}
-                                - label: {align: BOTTOM_MID, y: -2, text: "Fan", text_font: font_small}
-
-                    # ---- right: power (on = glowing ring) ----
-                    # On (heat or fan): turns both off. Off: turns the heater on.
-                    - button:
-                        id: heater_power_btn
-                        styles: round_btn
-                        x: 246
-                        y: 150
-                        width: 64
-                        height: 64
-                        bg_color: 0x141B2B
-                        border_color: 0x3A4660
-                        border_width: 3
-                        on_click:
-                          - if:
-                              condition:
-                                lambda: return id(heater_power_on).state || id(heater_fan_on).state;
-                              then:
-                                - homeassistant.action:
-                                    action: switch.turn_off
-                                    data:
-                                      entity_id: ${heater_power_switch}
-                                - homeassistant.action:
-                                    action: switch.turn_off
-                                    data:
-                                      entity_id: ${heater_fan_switch}
-                              else:
-                                - homeassistant.action:
-                                    action: switch.turn_on
-                                    data:
-                                      entity_id: ${heater_power_switch}
-                        widgets:
-                          - label: {align: CENTER, text: "\U000F0425", text_font: font_mdi_36, text_color: 0xFFFFFF}
+                                - label: {align: TOP_MID, y: 16, text: "\U000F0210", text_font: font_mdi_36}
+                                - label: {align: BOTTOM_MID, y: -14, text: "Fan", text_font: font_body}
 
         # =====================================================================
-        # 3. GARAGE Roller DOOR                     col 9 span 2 | row 1 span 5
-        # =====================================================================
-        - obj:
-            styles: cell_style
-            scrollable: false
-            grid_cell_column_pos: 9
-            grid_cell_row_pos: 1
-            grid_cell_column_span: 2
-            grid_cell_row_span: 5
-            grid_cell_x_align: STRETCH
-            grid_cell_y_align: STRETCH
-            widgets:
-              - obj:
-                  id: card_garage
-                  styles: card_style
-                  width: 100%
-                  height: 100%
-                  scrollable: false
-                  widgets:
-                    - label:
-                        x: 42
-                        y: 10
-                        text: "Garage Roller"
-                        text_font: font_small
-                    - label:
-                        id: garage_icon
-                        styles: icon_24
-                        x: 12
-                        y: 10
-                        text: "\U000F06D9"
-                    - obj:          # door position: roller-door slats
-                        align: TOP_MID
-                        id: garage_position_container
-                        y: 52
-                        width: 150
-                        height: 110
-                        radius: 8
-                        bg_color: 0x222B38
-                        border_color: 0x3A4658
-                        border_width: 2
-                        pad_all: 0
-                        scrollable: false
-                        widgets:
-                          # Roller-door curtain: horizontal slats from the top,
-                          # height = closed share of the door (100 - position %).
-                          # Slats stay at the bottom edge, so a shorter curtain
-                          # looks like the door rolling up. The container clips it.
-                          - obj:
-                              id: garage_door_curtain
-                              align: TOP_MID
-                              width: 100%
-                              height: 100%
-                              bg_opa: TRANSP
-                              border_width: 0
-                              radius: 0
-                              pad_all: 0
-                              scrollable: false
-                              layout:
-                                type: flex
-                                flex_flow: COLUMN
-                                flex_align_main: END
-                                flex_align_cross: CENTER
-                                pad_row: 3
-                              widgets:
-                                - obj: {styles: garage_slat}
-                                - obj: {styles: garage_slat}
-                                - obj: {styles: garage_slat}
-                                - obj: {styles: garage_slat}
-                                - obj: {styles: garage_slat}
-                                - obj: {styles: garage_slat}
-                                - obj: {styles: garage_slat}
-                                - obj: {styles: garage_slat}
-                                - obj: {styles: garage_slat}
-                                - obj: {styles: garage_slat}
-                    
-                    # Door position, left of the control button
-                    - label:
-                        id: garage_position_label
-                        align: BOTTOM_RIGHT
-                        x: -100
-                        y: -25
-                        text: "--%"
-                        text_font: font_title
-                        text_color: 0xFFFFFF
-                    # Open / Closed / Partly open, under the percentage
-                    # (same right edge)
-                    - label:
-                        id: garage_status_label
-                        align: BOTTOM_RIGHT
-                        x: -100
-                        y: -4
-                        text: "--"
-                        text_font: font_small
-                        text_color: 0xA7B2C4
-                    # One button for the controller's next action (Up / Stop /
-                    # Down); garage_update_button sets its icon and colour.
-                    - button:
-                        id: garage_btn
-                        styles: round_btn
-                        align: BOTTOM_RIGHT
-                        x: -12
-                        y: -12                  # same size and bottom offset as the lock
-                        width: 48               # buttons, so all three sit on one line
-                        height: 48
-                        bg_color: 0x527FD6
-                        on_click:
-                          - homeassistant.action:
-                              action: button.press
-                              data:
-                                entity_id: !lambda |-
-                                  if (id(garage_next_stop).state) return std::string("${garage_stop_button}");
-                                  if (id(garage_next_down).state) return std::string("${garage_down_button}");
-                                  return std::string("${garage_up_button}");
-                        widgets:
-                          - label:
-                              id: garage_btn_icon
-                              align: CENTER
-                              text: "\U000F0737"
-                              text_font: font_mdi_24
-                              text_color: 0xFFFFFF
-        # =====================================================================
-        # 4. FRONT DOOR LOCK                 col 11 span 1 | row 1 span 5
-        # =====================================================================
-        - obj:
-            styles: cell_style
-            scrollable: false
-            grid_cell_column_pos: 11
-            grid_cell_row_pos: 1
-            grid_cell_column_span: 1
-            grid_cell_row_span: 5
-            grid_cell_x_align: STRETCH
-            grid_cell_y_align: STRETCH
-            widgets:
-              - obj:
-                  id: card_front_lock
-                  styles: card_style
-                  width: 100%
-                  height: 100%
-                  scrollable: false
-                  clip_corner: true
-                  widgets:
-                    # Background: lock photo at 75% of the card width centred.
-                    - image:
-                        src: img_smart_lock
-                        align: CENTER
-                        y: -10
-                    - label:
-                        align: TOP_MID
-                        y: 8
-                        text: "Front"
-                        text_font: font_small
-                        text_color: 0xFFFFFF
-                    - button:
-                        id: front_lock_btn
-                        styles: round_btn
-                        align: BOTTOM_MID
-                        y: -12
-                        width: 48
-                        height: 48
-                        bg_color: 0x713F46          # unlocked
-                        checked:
-                          bg_color: 0x276B57        # locked
-                        on_click:
-                          - if:
-                              condition:
-                                text_sensor.state:
-                                  id: front_lock_state
-                                  state: "locked"
-                              then:
-                                - homeassistant.action:
-                                    action: lock.unlock
-                                    data:
-                                      entity_id: ${front_lock_entity}
-                              else:
-                                - homeassistant.action:
-                                    action: lock.lock
-                                    data:
-                                      entity_id: ${front_lock_entity}
-                        widgets:
-                          - label:
-                              id: front_lock_icon        # locked / unlocked icon
-                              align: CENTER
-                              text: "\U000F033E"
-                              text_font: font_mdi_24
-                              text_color: 0xFFFFFF
-
-        # =====================================================================
-        # 4b. GARAGE DOOR LOCK               col 12 span 1 | row 1 span 5
-        # =====================================================================
-        - obj:
-            styles: cell_style
-            scrollable: false
-            grid_cell_column_pos: 12
-            grid_cell_row_pos: 1
-            grid_cell_column_span: 1
-            grid_cell_row_span: 5
-            grid_cell_x_align: STRETCH
-            grid_cell_y_align: STRETCH
-            widgets:
-              - obj:
-                  id: card_garage_lock
-                  styles: card_style
-                  width: 100%
-                  height: 100%
-                  scrollable: false
-                  clip_corner: true
-                  widgets:
-                    - image:
-                        src: img_smart_lock
-                        align: CENTER
-                        y: -10
-                    - label:
-                        align: TOP_MID
-                        y: 8
-                        text: "Garage"
-                        text_font: font_small
-                        text_color: 0xFFFFFF
-                    - button:
-                        id: garage_lock_btn
-                        styles: round_btn
-                        align: BOTTOM_MID
-                        y: -12
-                        width: 48
-                        height: 48
-                        bg_color: 0x713F46          # unlocked
-                        checked:
-                          bg_color: 0x276B57        # locked
-                        on_click:
-                          - if:
-                              condition:
-                                text_sensor.state:
-                                  id: garage_lock_state
-                                  state: "locked"
-                              then:
-                                - homeassistant.action:
-                                    action: lock.unlock
-                                    data:
-                                      entity_id: ${garage_lock_entity}
-                              else:
-                                - homeassistant.action:
-                                    action: lock.lock
-                                    data:
-                                      entity_id: ${garage_lock_entity}
-                        widgets:
-                          - label:
-                              id: garage_lock_icon       # locked / unlocked icon
-                              align: CENTER
-                              text: "\U000F033E"
-                              text_font: font_mdi_24
-                              text_color: 0xFFFFFF
-
-        
-
-        # =====================================================================
-        # 5. INTERCOM                        col 1 span 4 | row 6 span 6
+        # 8. SECURITY CAMERAS               col 1 span 5 | row 2
         # =====================================================================
         - obj:
             styles: cell_style
             scrollable: false
             grid_cell_column_pos: 1
-            grid_cell_row_pos: 6
-            grid_cell_column_span: 4
-            grid_cell_row_span: 6
-            grid_cell_x_align: STRETCH
-            grid_cell_y_align: STRETCH
-            widgets:
-              # VoIP panel. Sized by the grid cell (about 382x232); the call-state
-              # groups fill the right 60% and update_call_tile shows one at a time.
-              - obj:
-                  id: voip_tile
-                  styles: card_style
-                  width: 100%
-                  height: 100%
-                  scrollable: false
-                  scrollbar_mode: "off"
-                  clip_corner: true
-                  widgets:
-                    - label:
-                        styles: icon_24
-                        x: 14
-                        y: 10
-                        text: "\U000F0869"
-                    - label:
-                        styles: title_text
-                        x: 48
-                        y: 8
-                        text: "Intercom"
-                 
-                    - image:        # door-station photo, fitted to 130x174
-                        src: img_intercom_panel
-                        align: BOTTOM_LEFT
-                        x: 14
-                        y: -12
-
-                    # ---- idle: contact browser ----
-                    - obj:
-                        id: call_idle_group
-                        align: TOP_RIGHT
-                        width: 60%
-                        height: 100%
-                        bg_opa: TRANSP
-                        border_width: 0
-                        radius: 0
-                        pad_all: 0
-                        scrollable: false
-                        scrollbar_mode: "off"
-                        widgets:
-                          - label:
-                              id: call_idle_header_label
-                              align: TOP_RIGHT
-                              x: -14
-                              y: 12
-                              text: "Keypad"
-                              text_color: 0x8DAEFF
-                              text_font: font_small
-                              clickable: true
-                              gesture_bubble: false
-                              on_click:
-                                - script.execute: show_voip_keypad
-                          - obj:
-                              id: call_idle_header_rule
-                              align: TOP_RIGHT
-                              x: -14
-                              y: 32
-                              width: 54
-                              height: 2
-                              bg_color: 0x8DAEFF
-                              border_width: 0
-                              radius: 1
-                          - label:
-                              id: call_idle_peer_label
-                              align: TOP_MID
-                              y: 66
-                              width: 210
-                              text: "-"
-                              text_color: 0xFFFFFF
-                              text_font: font_small_18
-                              text_align: CENTER
-                              long_mode: DOT
-                          - label:
-                              id: call_idle_contacts_label
-                              align: TOP_MID
-                              y: 108
-                              text: "Contacts: 0"
-                              text_color: 0x8995A7
-                              text_font: font_small
-                          - label:
-                              id: call_idle_hint_label
-                              align: TOP_MID
-                              y: 134
-                              width: 210
-                              text: "Swipe to browse"
-                              text_color: 0x778397
-                              text_font: font_small
-                              text_align: CENTER
-                              long_mode: DOT
-                          - obj:
-                              id: call_idle_swipe_area
-                              align: TOP_MID
-                              y: 40
-                              width: 100%
-                              height: 120
-                              bg_opa: TRANSP
-                              border_width: 0
-                              scrollable: false
-                              clickable: true
-                              gesture_bubble: false
-                              on_swipe_left:
-                                - voip_stack.next_contact:
-                                - script.execute: update_ic_idle_labels
-                              on_swipe_right:
-                                - voip_stack.prev_contact:
-                                - script.execute: update_ic_idle_labels
-                          - button:
-                              id: call_prev_btn
-                              align: BOTTOM_LEFT
-                              x: 8
-                              y: -16
-                              width: 58
-                              height: 50
-                              bg_color: 0x202B3B
-                              radius: 9
-                              on_click:
-                                - voip_stack.prev_contact:
-                              widgets:
-                                - label:
-                                    align: CENTER
-                                    text: "\U000F0141"
-                                    text_color: 0xDCE3ED
-                                    text_font: font_action_icon
-                          - button:
-                              id: call_button_widget
-                              align: BOTTOM_MID
-                              y: -12
-                              width: 78
-                              height: 58
-                              bg_color: 0x43A982
-                              radius: 9
-                              on_click:
-                                - voip_stack.call_toggle:
-                              widgets:
-                                - label:
-                                    align: CENTER
-                                    text: "\U000F03F2"
-                                    text_color: 0xFFFFFF
-                                    text_font: font_action_icon
-                          - button:
-                              id: call_next_btn
-                              align: BOTTOM_RIGHT
-                              x: -8
-                              y: -16
-                              width: 58
-                              height: 50
-                              bg_color: 0x202B3B
-                              radius: 9
-                              on_click:
-                                - voip_stack.next_contact:
-                              widgets:
-                                - label:
-                                    align: CENTER
-                                    text: "\U000F0142"
-                                    text_color: 0xDCE3ED
-                                    text_font: font_action_icon
-
-                    # ---- idle: dial keypad (slides in over the contact browser) ----
-                    - obj:
-                        id: call_keypad_group
-                        align: TOP_RIGHT
-                        width: 60%
-                        height: 100%
-                        bg_color: 0x151D2B
-                        border_width: 0
-                        radius: 0
-                        pad_all: 0
-                        scrollable: false
-                        clickable: true
-                        gesture_bubble: false
-                        hidden: true
-                        widgets:
-                          - label:
-                              id: call_keypad_value_label
-                              align: TOP_LEFT
-                              x: 8
-                              y: 12
-                              width: 140
-                              text: "Enter number"
-                              text_color: 0xFFFFFF
-                              text_font: font_small
-                              long_mode: DOT
-                          - label:
-                              id: call_keypad_header_label
-                              align: TOP_RIGHT
-                              x: -14
-                              y: 12
-                              text: "Contacts"
-                              text_color: 0x8DAEFF
-                              text_font: font_small
-                              clickable: true
-                              gesture_bubble: false
-                              on_click:
-                                - script.execute: hide_voip_keypad
-                          - obj:
-                              id: call_keypad_header_rule
-                              align: TOP_RIGHT
-                              x: -14
-                              y: 32
-                              width: 66
-                              height: 2
-                              bg_color: 0x8DAEFF
-                              border_width: 0
-                              radius: 1
-                          - buttonmatrix:
-                              id: call_keypad_matrix
-                              align: TOP_MID
-                              y: 38
-                              width: 216
-                              height: 138
-                              bg_opa: TRANSP
-                              border_width: 0
-                              pad_all: 0
-                              pad_row: 6
-                              pad_column: 6
-                              gesture_bubble: true
-                              items:
-                                bg_color: 0x202B3B
-                                text_color: 0xFFFFFF
-                                text_font: font_body
-                                radius: 8
-                              rows:
-                                - buttons:
-                                    - text: "1"
-                                    - text: "2"
-                                    - text: "3"
-                                - buttons:
-                                    - text: "4"
-                                    - text: "5"
-                                    - text: "6"
-                                - buttons:
-                                    - text: "7"
-                                    - text: "8"
-                                    - text: "9"
-                                - buttons:
-                                    - text: "*"
-                                    - text: "0"
-                                    - text: "#"
-                              on_click:
-                                - lambda: |-
-                                    static constexpr char KEYS[] = "123456789*0#";
-                                    if (x >= 12 || id(voip_dial_buffer).size() >= 32) return;
-                                    id(voip_dial_buffer).push_back(KEYS[x]);
-                                    lv_label_set_text(id(call_keypad_value_label), id(voip_dial_buffer).c_str());
-                          - button:
-                              align: BOTTOM_LEFT
-                              x: 8
-                              y: -8
-                              width: 62
-                              height: 42
-                              bg_color: 0x202B3B
-                              radius: 8
-                              on_click:
-                                - lambda: |-
-                                    id(voip_dial_buffer).clear();
-                                    lv_label_set_text(id(call_keypad_value_label), "Enter number");
-                              widgets:
-                                - label:
-                                    align: CENTER
-                                    text: "CLEAR"
-                                    text_color: 0xDCE3ED
-                                    text_font: font_small
-                          - button:
-                              align: BOTTOM_MID
-                              y: -8
-                              width: 78
-                              height: 42
-                              bg_color: 0x43A982
-                              radius: 8
-                              on_click:
-                                - if:
-                                    condition:
-                                      lambda: return !id(voip_dial_buffer).empty();
-                                    then:
-                                      - voip_stack.call:
-                                          target: !lambda 'return id(voip_dial_buffer);'
-                                      - lambda: |-
-                                          id(voip_dial_buffer).clear();
-                                          lv_label_set_text(id(call_keypad_value_label), "Enter number");
-                              widgets:
-                                - label:
-                                    align: CENTER
-                                    text: "\U000F03F2"
-                                    text_color: 0xFFFFFF
-                                    text_font: font_mdi_24
-                          - button:
-                              align: BOTTOM_RIGHT
-                              x: -8
-                              y: -8
-                              width: 62
-                              height: 42
-                              bg_color: 0x202B3B
-                              radius: 8
-                              on_click:
-                                - lambda: |-
-                                    if (!id(voip_dial_buffer).empty()) id(voip_dial_buffer).pop_back();
-                                    lv_label_set_text(id(call_keypad_value_label), id(voip_dial_buffer).empty()
-                                        ? "Enter number" : id(voip_dial_buffer).c_str());
-                              widgets:
-                                - label:
-                                    align: CENTER
-                                    text: "DEL"
-                                    text_color: 0xDCE3ED
-                                    text_font: font_small
-
-                    # ---- incoming call ----
-                    - obj:
-                        id: call_ringing_in_group
-                        align: TOP_RIGHT
-                        width: 60%
-                        height: 100%
-                        bg_color: 0x2B1A22
-                        border_width: 0
-                        radius: 0
-                        pad_all: 0
-                        scrollable: false
-                        hidden: true
-                        widgets:
-                          - label:
-                              align: TOP_MID
-                              y: 14
-                              text: "Incoming call"
-                              text_color: 0xE47B86
-                              text_font: font_ui_medium
-                          - label:
-                              id: call_ringing_in_peer_label
-                              align: CENTER
-                              y: -20
-                              width: 210
-                              text: ""
-                              text_color: 0xFFFFFF
-                              text_font: font_small_18
-                              text_align: CENTER
-                              long_mode: DOT
-                          - button:
-                              align: BOTTOM_LEFT
-                              x: 8
-                              y: -14
-                              width: 104
-                              height: 56
-                              bg_color: 0x43A982
-                              radius: 9
-                              on_click:
-                                - voip_stack.answer_call:
-                              widgets:
-                                - label:
-                                    align: CENTER
-                                    text: "ANSWER"
-                                    text_color: 0xFFFFFF
-                                    text_font: font_body
-                          - button:
-                              align: BOTTOM_RIGHT
-                              x: -8
-                              y: -14
-                              width: 104
-                              height: 56
-                              bg_color: 0xD65B64
-                              radius: 9
-                              on_click:
-                                - voip_stack.decline_call:
-                              widgets:
-                                - label:
-                                    align: CENTER
-                                    text: "DECLINE"
-                                    text_color: 0xFFFFFF
-                                    text_font: font_body
-
-                    # ---- outgoing call ----
-                    - obj:
-                        id: call_ringing_out_group
-                        align: TOP_RIGHT
-                        width: 60%
-                        height: 100%
-                        bg_color: 0x2A241C
-                        border_width: 0
-                        radius: 0
-                        pad_all: 0
-                        scrollable: false
-                        hidden: true
-                        widgets:
-                          - label:
-                              id: call_ringing_out_status_label
-                              align: TOP_MID
-                              y: 14
-                              text: "CALLING"
-                              text_color: 0xD6A35D
-                              text_font: font_ui_medium
-                          - label:
-                              id: call_ringing_out_peer_label
-                              align: CENTER
-                              y: -24
-                              width: 210
-                              text: ""
-                              text_color: 0xFFFFFF
-                              text_font: font_title
-                              text_align: CENTER
-                              long_mode: DOT
-                          - label:
-                              align: CENTER
-                              y: 14
-                              text: "Waiting for answer"
-                              text_color: 0xC5CEDA
-                              text_font: font_small
-                          - button:
-                              align: BOTTOM_MID
-                              y: -14
-                              width: 150
-                              height: 56
-                              bg_color: 0xD65B64
-                              radius: 9
-                              on_click:
-                                - voip_stack.call_toggle:
-                              widgets:
-                                - label:
-                                    align: CENTER
-                                    text: "HANG UP"
-                                    text_color: 0xFFFFFF
-                                    text_font: font_body
-
-                    # ---- in call ----
-                    - obj:
-                        id: call_in_call_group
-                        align: TOP_RIGHT
-                        width: 60%
-                        height: 100%
-                        bg_color: 0x172A25
-                        border_width: 0
-                        radius: 0
-                        pad_all: 0
-                        scrollable: false
-                        hidden: true
-                        widgets:
-                          - label:
-                              align: TOP_MID
-                              y: 14
-                              text: "In call"
-                              text_color: 0x43A982
-                              text_font: font_ui_medium
-                          - label:
-                              id: p4_call_media_route_label
-                              align: TOP_MID
-                              y: 46
-                              width: 90%
-                              text: ""
-                              text_color: 0x9BA8B9
-                              text_font: font_small
-                              text_align: CENTER
-                              long_mode: DOT
-                          - label:
-                              id: call_in_call_peer_label
-                              align: CENTER
-                              y: -4
-                              width: 210
-                              text: ""
-                              text_color: 0xFFFFFF
-                              text_font: font_title
-                              text_align: CENTER
-                              long_mode: DOT
-                          - button:
-                              align: BOTTOM_MID
-                              y: -14
-                              width: 150
-                              height: 56
-                              bg_color: 0xD65B64
-                              radius: 9
-                              on_click:
-                                - voip_stack.call_toggle:
-                              widgets:
-                                - label:
-                                    align: CENTER
-                                    text: "HANG UP"
-                                    text_color: 0xFFFFFF
-                                    text_font: font_body
-
-                    # ---- call ended (shown ~4 s) ----
-                    - obj:
-                        id: call_ended_group
-                        align: TOP_RIGHT
-                        width: 60%
-                        height: 100%
-                        bg_color: 0x202833
-                        border_width: 0
-                        radius: 0
-                        pad_all: 0
-                        scrollable: false
-                        hidden: true
-                        widgets:
-                          - label:
-                              id: call_ended_peer_label
-                              align: CENTER
-                              y: -30
-                              width: 210
-                              text: ""
-                              text_color: 0xFFFFFF
-                              text_font: font_ui_medium
-                              text_align: CENTER
-                              long_mode: WRAP
-                          - label:
-                              id: call_ended_reason_label
-                              align: CENTER
-                              y: 30
-                              width: 210
-                              text: ""
-                              text_color: 0xE2C17B
-                              text_font: font_small
-                              text_align: CENTER
-                              long_mode: WRAP
-
-        # =====================================================================
-        # 6. ELECTRICITY USAGE               col 5 span 4 | row 6 span 6
-        # =====================================================================
-        - obj:
-            styles: cell_style
-            scrollable: false
-            grid_cell_column_pos: 5
-            grid_cell_row_pos: 6
-            grid_cell_column_span: 4
-            grid_cell_row_span: 6
-            grid_cell_x_align: STRETCH
-            grid_cell_y_align: STRETCH
-            widgets:
-              - obj:
-                  id: card_electricity
-                  styles: card_style
-                  width: 100%
-                  height: 100%
-                  scrollable: false
-                  widgets:
-                    - label:
-                        styles: icon_24
-                        x: 14
-                        y: 10
-                        text: "\U000F0241"
-                    - label:
-                        styles: title_text
-                        x: 48
-                        y: 8
-                        text: "Electricity"
-                    # Daily energy for the last 14 completed days, oldest on
-                    # the left. fetch_energy_history fills energy_history from
-                    # HA long-term statistics; draw_energy_bars scales the bars
-                    # and the Y axis (kWh) to the busiest day.
-                    - label:
-                        id: elec_axis_max
-                        x: 0
-                        y: 40
-                        width: 31
-                        text: ""
-                        text_align: RIGHT
-                        text_font: font_small
-                        text_color: 0xA7B2C4
-                    - label:
-                        id: elec_axis_mid
-                        x: 0
-                        y: 110
-                        width: 31
-                        text: ""
-                        text_align: RIGHT
-                        text_font: font_small
-                        text_color: 0xA7B2C4
-                    - label:
-                        x: 0
-                        y: 180
-                        width: 31
-                        text: "0"
-                        text_align: RIGHT
-                        text_font: font_small
-                        text_color: 0xA7B2C4
-                    - obj:          # Y axis line
-                        x: 35
-                        y: 48
-                        width: 2
-                        height: 140
-                        radius: 0
-                        border_width: 0
-                        bg_color: 0x34445A
-                    - label:        # axis unit, under the axis
-                        x: 11
-                        y: 200
-                        text: "kWh"
-                        text_font: font_small
-                        text_color: 0x778397
-                    - obj:
-                        id: elec_bars
-                        x: 43
-                        y: 48
-                        width: 180          # 14 bars x 10 px + gaps; ends at x 223, clear of the ring (x ~256)
-                        height: 140
-                        bg_opa: TRANSP
-                        border_width: 0
-                        pad_all: 0
-                        scrollable: false
-                        layout:
-                          type: flex
-                          flex_flow: ROW
-                          flex_align_main: SPACE_BETWEEN
-                          flex_align_cross: END
-                          flex_align_track: END
-                          pad_column: 0     # no theme gap: SPACE_BETWEEN alone spaces the bars
-                        widgets:
-                          - obj: {id: ebar_0, styles: ebar}
-                          - obj: {id: ebar_1, styles: ebar}
-                          - obj: {id: ebar_2, styles: ebar}
-                          - obj: {id: ebar_3, styles: ebar}
-                          - obj: {id: ebar_4, styles: ebar}
-                          - obj: {id: ebar_5, styles: ebar}
-                          - obj: {id: ebar_6, styles: ebar}
-                          - obj: {id: ebar_7, styles: ebar}
-                          - obj: {id: ebar_8, styles: ebar}
-                          - obj: {id: ebar_9, styles: ebar}
-                          - obj: {id: ebar_10, styles: ebar}
-                          - obj: {id: ebar_11, styles: ebar}
-                          - obj: {id: ebar_12, styles: ebar}
-                          - obj: {id: ebar_13, styles: ebar}
-                    # Daily average, centred under the power ring
-                    - label:
-                        id: elec_hist_label
-                        align: RIGHT_MID
-                        x: -4
-                        y: 85
-                        width: 140
-                        text: ""
-                        text_align: CENTER
-                        text_font: font_small
-                        text_color: 0xA7B2C4
-                    - obj:          # ring + live value
-                        align: RIGHT_MID
-                        x: -22
-                        y: 14
-                        width: 104
-                        height: 104
-                        bg_opa: TRANSP
-                        border_width: 0
-                        pad_all: 0
-                        scrollable: false
-                        widgets:
-                          - arc:
-                              id: elec_arc
-                              align: CENTER
-                              width: 104
-                              height: 104
-                              min_value: 0
-                              max_value: ${power_max_w}
-                              value: 2400
-                              adjustable: false
-                              arc_color: 0x29364A
-                              arc_width: 7
-                              indicator:
-                                arc_color: 0x527FD6
-                                arc_width: 7
-                          - label:
-                              id: elec_value_label
-                              align: CENTER
-                              y: -8
-                              text: "2.4"
-                              text_font: font_ui_medium
-                              text_color: 0xFFFFFF
-                          - label:
-                              align: CENTER
-                              y: 16
-                              text: "kW"
-                              text_font: font_small
-                              text_color: 0xA7B2C4
-
-        # =====================================================================
-        # 7. MEDIA PLAYER                    col 9 span 4 | row 6 span 6
-        # The player named in ${media_player_select_entity}. media_poll reads
-        # its state from HA every 3 s while the home page is shown;
-        # media_draw / media_tick fill the widgets.
-        # =====================================================================
-        - obj:
-            styles: cell_style
-            scrollable: false
-            grid_cell_column_pos: 9
-            grid_cell_row_pos: 6
-            grid_cell_column_span: 4
-            grid_cell_row_span: 6
-            grid_cell_x_align: STRETCH
-            grid_cell_y_align: STRETCH
-            widgets:
-              - obj:
-                  id: card_media
-                  styles: card_style
-                  width: 100%
-                  height: 100%
-                  scrollable: false
-                  # Blue glass: lighter at the top, a brighter blue edge.
-                  bg_color: 0x23335E
-                  bg_grad_color: 0x0F1628
-                  bg_grad_dir: VER
-                  bg_opa: 70%
-                  border_color: 0x4A64B8
-                  widgets:
-                    # Album art, with a vinyl record behind it for when there
-                    # is no (JPEG) art.
-                    - obj:
-                        x: 16
-                        y: 16
-                        width: 120
-                        height: 120
-                        radius: 14
-                        bg_color: 0x1B2A55
-                        bg_grad_color: 0x121A30
-                        bg_grad_dir: VER
-                        border_color: 0x3A4F80
-                        border_width: 1
-                        pad_all: 0
-                        clip_corner: true
-                        scrollable: false
-                        widgets:
-                          - obj:
-                              align: CENTER
-                              width: 104
-                              height: 104
-                              radius: 52
-                              bg_color: 0x2563EB
-                              bg_grad_color: 0x9333EA
-                              bg_grad_dir: VER
-                              border_color: 0x1E293B
-                              border_width: 1
-                              scrollable: false
-                          - obj:      # groove ring
-                              align: CENTER
-                              width: 70
-                              height: 70
-                              radius: 35
-                              bg_opa: TRANSP
-                              border_color: 0x93C5FD
-                              border_opa: 40%
-                              border_width: 1
-                              scrollable: false
-                          - obj:      # label
-                              align: CENTER
-                              width: 36
-                              height: 36
-                              radius: 18
-                              bg_color: 0x1E2A44
-                              border_color: 0x0F172A
-                              border_width: 2
-                              scrollable: false
-                          - obj:      # spindle hole
-                              align: CENTER
-                              width: 8
-                              height: 8
-                              radius: 4
-                              bg_color: 0x0B1018
-                              border_width: 0
-                          - image:
-                              id: media_art
-                              src: media_art_img
-                              align: CENTER
-                              hidden: true
-                    - label:
-                        id: media_title_label
-                        x: 150
-                        y: 16
-                        width: 216
-                        text: "Nothing playing"
-                        text_font: font_ui_medium
-                        text_color: 0xFFFFFF
-                        long_mode: DOT
-                    - label:
-                        id: media_artist_label
-                        x: 150
-                        y: 50
-                        width: 216
-                        text: ""
-                        text_font: font_small_18
-                        text_color: 0x9DB4FF
-                        long_mode: DOT
-                    - label:
-                        id: media_album_label
-                        x: 150
-                        y: 76
-                        width: 216
-                        text: ""
-                        text_font: font_small
-                        text_color: 0x7183A8
-                        long_mode: DOT
-                    # Progress; drag and release to seek.
-                    - slider:
-                        id: media_seek_slider
-                        x: 152
-                        y: 112
-                        width: 208
-                        height: 6
-                        min_value: 0
-                        max_value: 1000
-                        value: 0
-                        bg_color: 0x2A3550
-                        bg_opa: COVER
-                        radius: 3
-                        indicator:
-                          bg_color: 0x3B82F6
-                          bg_grad_color: 0xC4B5FD
-                          bg_grad_dir: HOR
-                          radius: 3
-                        knob:
-                          bg_color: 0xFFFFFF
-                          pad_all: 3
-                          radius: 100
-                        on_release:
-                          - if:
-                              condition:
-                                lambda: |-
-                                  return id(media_duration) > 0 &&
-                                         id(media_entity).state.rfind("media_player.", 0) == 0;
-                              then:
-                                - lambda: |-
-                                    id(media_pos) = x / 1000.0f * id(media_duration);
-                                    id(media_pos_at) = id(my_time).now().timestamp;
-                                - homeassistant.action:
-                                    action: media_player.media_seek
-                                    data:
-                                      entity_id: !lambda 'return id(media_entity).state;'
-                                      seek_position: !lambda |-
-                                        char buf[16];
-                                        snprintf(buf, sizeof(buf), "%.1f", id(media_pos));
-                                        return std::string(buf);
-                                - script.execute: media_tick
-                    - label:
-                        id: media_elapsed_label
-                        x: 150
-                        y: 126
-                        text: "--:--"
-                        text_font: font_small
-                        text_color: 0x9DB4FF
-                    - label:
-                        id: media_duration_label
-                        x: 286
-                        y: 126
-                        width: 80
-                        text: "--:--"
-                        text_align: RIGHT
-                        text_font: font_small
-                        text_color: 0x9DB4FF
-                    - button:
-                        id: media_prev_btn
-                        styles: round_btn
-                        align: BOTTOM_MID
-                        x: -84
-                        y: -16
-                        width: 48
-                        height: 48
-                        bg_color: 0x1A2333
-                        border_color: 0x2F3B52
-                        border_width: 1
-                        on_click:
-                          - script.execute:
-                              id: media_command
-                              service: media_player.media_previous_track
-                        widgets:
-                          - label: {align: CENTER, text: "\U000F04AE", text_font: font_mdi_24, text_color: 0xFFFFFF}
-                    # Play / pause: glowing blue-purple ring like the mockup.
-                    - button:
-                        id: media_play_btn
-                        styles: round_btn
-                        align: BOTTOM_MID
-                        y: -10
-                        width: 60
-                        height: 60
-                        bg_color: 0x141B2B
-                        border_color: 0x8B7CF6
-                        border_width: 3
-                        shadow_color: 0x6366F1
-                        shadow_width: 16
-                        shadow_opa: 50%
-                        on_click:
-                          # Show the new state at once; the next poll confirms it.
-                          - lambda: |-
-                              const time_t now = id(my_time).now().timestamp;
-                              if (id(media_state) == "playing") {
-                                if (id(media_pos_at) > 0) id(media_pos) += now - id(media_pos_at);
-                                id(media_state) = "paused";
-                              } else {
-                                id(media_state) = "playing";
-                              }
-                              id(media_pos_at) = now;
-                          - script.execute: media_draw
-                          - script.execute:
-                              id: media_command
-                              service: media_player.media_play_pause
-                        widgets:
-                          - label: {id: media_play_icon, align: CENTER, text: "\U000F040A", text_font: font_mdi_36, text_color: 0xFFFFFF}
-                    - button:
-                        id: media_next_btn
-                        styles: round_btn
-                        align: BOTTOM_MID
-                        x: 84
-                        y: -16
-                        width: 48
-                        height: 48
-                        bg_color: 0x1A2333
-                        border_color: 0x2F3B52
-                        border_width: 1
-                        on_click:
-                          - script.execute:
-                              id: media_command
-                              service: media_player.media_next_track
-                        widgets:
-                          - label: {align: CENTER, text: "\U000F04AD", text_font: font_mdi_24, text_color: 0xFFFFFF}
-
-        # =====================================================================
-        # 8. SECURITY CAMERAS               col 1 span 5 | row 12 span 5
-        # =====================================================================
-        - obj:
-            styles: cell_style
-            scrollable: false
-            grid_cell_column_pos: 1
-            grid_cell_row_pos: 12
+            grid_cell_row_pos: 2
             grid_cell_column_span: 5
-            grid_cell_row_span: 5
+            grid_cell_row_span: 1
             grid_cell_x_align: STRETCH
             grid_cell_y_align: STRETCH
             widgets:
@@ -2838,11 +1714,24 @@ lvgl:
                         x: 48
                         y: 6
                         text: "Cameras"
+                    - label:        # ">" opens the live camera pages
+                        align: TOP_RIGHT
+                        x: -10
+                        y: 0
+                        text: "\U000F0142"
+                        text_font: font_action_icon
+                        text_color: 0xA7B2C4
+                        clickable: true
+                        on_click:
+                          - lvgl.page.show:
+                              id: cam_front_page
+                              animation: MOVE_LEFT
+                              time: 250ms
                     - obj:          # Front Door: last Frigate person snapshot
                         id: cam_front
                         styles: card_style
                         x: 12
-                        y: 42
+                        y: 64
                         width: 221          # 20 px name strip + 5 px gap + 196 px snapshot
                         height: 196
                         radius: 10
@@ -2891,7 +1780,7 @@ lvgl:
                         id: cam_driveway
                         styles: card_style
                         x: 246              # 13 px gap after the 221 px Front Door tile
-                        y: 42
+                        y: 64
                         width: 221
                         height: 196
                         radius: 10
@@ -2938,119 +1827,7 @@ lvgl:
                                     transform_pivot_y: 10
 
         # =====================================================================
-        # 9. SCENES                          col 9 span 4 | row 12 span 5
-        # =====================================================================
-        - obj:  # Scenes
-            id: card_scenes_cell
-            styles: cell_style
-            scrollable: false
-            grid_cell_column_pos: 9
-            grid_cell_row_pos: 12
-            grid_cell_column_span: 4
-            grid_cell_row_span: 5
-            grid_cell_x_align: STRETCH
-            grid_cell_y_align: STRETCH
-            widgets:
-              - obj:
-                  id: card_scenes
-                  styles: card_style
-                  width: 100%
-                  height: 100%
-                  scrollable: false
-                  widgets:
-                    - label:
-                        styles: icon_24
-                        x: 14
-                        y: 8
-                        text: "\U000F04CE"
-                    - label:
-                        styles: title_text
-                        x: 48
-                        y: 6
-                        text: "Scenes"
-                    # Four scenes in a 2 x 2 grid: 172 x 76 px, 10 px gaps, aligned with the Lights tiles (y 64-226),
-                    # icon on the left and the name beside it.
-                    - button:  #Scene Home
-                        id: scene_home_btn
-                        styles: scene_btn
-                        x: 12
-                        y: 64
-                        width: 172
-                        height: 76
-                        state:
-                          checked: true
-                        checked:
-                          bg_color: 0x4F7FE8
-                          border_color: 0x82A5FF
-                        on_click:
-                          - homeassistant.action:
-                              action: scene.turn_on
-                              data:
-                                entity_id: ${scene_home_entity}
-                          - script.execute: {id: scene_select, which: 0}
-                        widgets:
-                          - label: {align: LEFT_MID, x: 14, text: "\U000F02DC", text_font: font_mdi_36, text_color: 0xFFFFFF}
-                          - label: {align: LEFT_MID, x: 62, text: "Home", text_font: font_small}
-                    - button:  #Scene Night
-                        id: scene_night_btn
-                        styles: scene_btn
-                        x: 194
-                        y: 64
-                        width: 172
-                        height: 76
-                        checked:
-                          bg_color: 0x4F7FE8
-                          border_color: 0x82A5FF
-                        on_click:
-                          - homeassistant.action:
-                              action: scene.turn_on
-                              data:
-                                entity_id: ${scene_night_entity}
-                          - script.execute: {id: scene_select, which: 1}
-                        widgets:
-                          - label: {align: LEFT_MID, x: 14, text: "\U000F0594", text_font: font_mdi_36, text_color: 0xB8C8F0}
-                          - label: {align: LEFT_MID, x: 62, text: "Night", text_font: font_small}
-                    - button:  #Scene Movie
-                        id: scene_movie_btn
-                        styles: scene_btn
-                        x: 12
-                        y: 150
-                        width: 172
-                        height: 76
-                        checked:
-                          bg_color: 0x4F7FE8
-                          border_color: 0x82A5FF
-                        on_click:
-                          - homeassistant.action:
-                              action: scene.turn_on
-                              data:
-                                entity_id: ${scene_movie_entity}
-                          - script.execute: {id: scene_select, which: 2}
-                        widgets:
-                          - label: {align: LEFT_MID, x: 14, text: "\U000F0FCE", text_font: font_mdi_36, text_color: 0xB8C8F0}
-                          - label: {align: LEFT_MID, x: 62, text: "Movie", text_font: font_small}
-                    - button:  #Scene Cat Away
-                        id: scene_cat_away_btn
-                        styles: scene_btn
-                        x: 194
-                        y: 150
-                        width: 172
-                        height: 76
-                        checked:
-                          bg_color: 0x4F7FE8
-                          border_color: 0x82A5FF
-                        on_click:
-                          - homeassistant.action:
-                              action: scene.turn_on
-                              data:
-                                entity_id: ${scene_cat_away_entity}
-                          - script.execute: {id: scene_select, which: 3}
-                        widgets:
-                          - label: {align: LEFT_MID, x: 14, text: "\U000F011B", text_font: font_mdi_36, text_color: 0xB8C8F0}
-                          - label: {align: LEFT_MID, x: 62, text: "Cat Away", text_font: font_small}
-
-        # =====================================================================
-        # 10. Living room LIGHTS                         col 6 span 3 | row 12 span 5
+        # 10. Living room LIGHTS            col 6 span 3 | row 2
         # Three toggle tiles. Off: dark grey. On: amber with an amber glow
         # (the "checked" state, set from the HA light state by the
         # light_*_on binary sensors). Tap toggles the light in HA.
@@ -3060,9 +1837,9 @@ lvgl:
             styles: cell_style
             scrollable: false
             grid_cell_column_pos: 6
-            grid_cell_row_pos: 12
+            grid_cell_row_pos: 2
             grid_cell_column_span: 3
-            grid_cell_row_span: 5
+            grid_cell_row_span: 1
             grid_cell_x_align: STRETCH
             grid_cell_y_align: STRETCH
             widgets:
@@ -3109,7 +1886,7 @@ lvgl:
                               clickable: false
                           - label:
                               align: BOTTOM_MID
-                              y: -41
+                              y: -31
                               width: 76
                               text: "TV Lamp"
                               text_align: CENTER
@@ -3137,13 +1914,13 @@ lvgl:
                           - label:
                               id: light_living_left_icon
                               align: TOP_MID
-                              y: 15
+                              y: 25
                               text: "\U000F0769"
                               text_font: font_mdi_36
                               text_color: 0x8995A7
                           - label:
                               align: BOTTOM_MID
-                              y: -10
+                              y: -31
                               width: 76
                               text: "Left"
                               text_align: CENTER
@@ -3171,13 +1948,13 @@ lvgl:
                           - label:
                               id: light_living_right_icon
                               align: TOP_MID
-                              y: 15
+                              y: 25
                               text: "\U000F0769"
                               text_font: font_mdi_36
                               text_color: 0x8995A7
                           - label:
                               align: BOTTOM_MID
-                              y: -10
+                              y: -31
                               width: 76
                               text: "Right"
                               text_align: CENTER
@@ -3185,7 +1962,118 @@ lvgl:
                               text_font: font_small
                               text_color: 0xFFFFFF
 
-        # ---- row 17: small bottom margin (FR(10)), intentionally empty ------
+        # =====================================================================
+        # 9. SCENES                          col 9 span 4 | row 2
+        # =====================================================================
+        - obj:  # Scenes
+            id: card_scenes_cell
+            styles: cell_style
+            scrollable: false
+            grid_cell_column_pos: 9
+            grid_cell_row_pos: 2
+            grid_cell_column_span: 4
+            grid_cell_row_span: 1
+            grid_cell_x_align: STRETCH
+            grid_cell_y_align: STRETCH
+            widgets:
+              - obj:
+                  id: card_scenes
+                  styles: card_style
+                  width: 100%
+                  height: 100%
+                  scrollable: false
+                  widgets:
+                    - label:
+                        styles: icon_24
+                        x: 14
+                        y: 8
+                        text: "\U000F04CE"
+                    - label:
+                        styles: title_text
+                        x: 48
+                        y: 6
+                        text: "Scenes"
+                    # Four scenes in a 2 x 2 grid: 172 x 96 px, 10 px gaps, aligned with the Lights tiles (y 64-266),
+                    # icon on the left and the name beside it.
+                    - button:  #Scene Home
+                        id: scene_home_btn
+                        styles: scene_btn
+                        x: 12
+                        y: 64
+                        width: 172
+                        height: 96
+                        state:
+                          checked: true
+                        checked:
+                          bg_color: 0x4F7FE8
+                          border_color: 0x82A5FF
+                        on_click:
+                          - homeassistant.action:
+                              action: scene.turn_on
+                              data:
+                                entity_id: ${scene_home_entity}
+                          - script.execute: {id: scene_select, which: 0}
+                        widgets:
+                          - label: {align: LEFT_MID, x: 14, text: "\U000F02DC", text_font: font_mdi_36, text_color: 0xFFFFFF}
+                          - label: {align: LEFT_MID, x: 62, text: "Home", text_font: font_small}
+                    - button:  #Scene Night
+                        id: scene_night_btn
+                        styles: scene_btn
+                        x: 194
+                        y: 64
+                        width: 172
+                        height: 96
+                        checked:
+                          bg_color: 0x4F7FE8
+                          border_color: 0x82A5FF
+                        on_click:
+                          - homeassistant.action:
+                              action: scene.turn_on
+                              data:
+                                entity_id: ${scene_night_entity}
+                          - script.execute: {id: scene_select, which: 1}
+                        widgets:
+                          - label: {align: LEFT_MID, x: 14, text: "\U000F0594", text_font: font_mdi_36, text_color: 0xB8C8F0}
+                          - label: {align: LEFT_MID, x: 62, text: "Night", text_font: font_small}
+                    - button:  #Scene Movie
+                        id: scene_movie_btn
+                        styles: scene_btn
+                        x: 12
+                        y: 170
+                        width: 172
+                        height: 96
+                        checked:
+                          bg_color: 0x4F7FE8
+                          border_color: 0x82A5FF
+                        on_click:
+                          - homeassistant.action:
+                              action: scene.turn_on
+                              data:
+                                entity_id: ${scene_movie_entity}
+                          - script.execute: {id: scene_select, which: 2}
+                        widgets:
+                          - label: {align: LEFT_MID, x: 14, text: "\U000F0FCE", text_font: font_mdi_36, text_color: 0xB8C8F0}
+                          - label: {align: LEFT_MID, x: 62, text: "Movie", text_font: font_small}
+                    - button:  #Scene Cat Away
+                        id: scene_cat_away_btn
+                        styles: scene_btn
+                        x: 194
+                        y: 170
+                        width: 172
+                        height: 96
+                        checked:
+                          bg_color: 0x4F7FE8
+                          border_color: 0x82A5FF
+                        on_click:
+                          - homeassistant.action:
+                              action: scene.turn_on
+                              data:
+                                entity_id: ${scene_cat_away_entity}
+                          - script.execute: {id: scene_select, which: 3}
+                        widgets:
+                          - label: {align: LEFT_MID, x: 14, text: "\U000F011B", text_font: font_mdi_36, text_color: 0xB8C8F0}
+                          - label: {align: LEFT_MID, x: 62, text: "Cat Away", text_font: font_small}
+
 
     # ==================================================================
     # CAMERA PAGES: one live RTSP camera per screen
@@ -3500,6 +2388,1350 @@ lvgl:
                         transform_rotation: 270
                         transform_pivot_x: 50
                         transform_pivot_y: 10
+    # ==================================================================
+    # SECURITY: a 4 x 3 grid of cards below the header. For now only the
+    # two door locks and the garage roller door, in the top row.
+    # ==================================================================
+    - id: security_page
+      bg_color: 0x0B1018
+      bg_image_src: img_home_wallpaper
+      scrollable: false
+      on_swipe_right:
+        - lvgl.page.show:
+            id: home_page
+            animation: MOVE_RIGHT
+            time: 250ms
+      widgets:
+        - button:
+            id: security_back_btn
+            styles: scene_btn
+            x: 16
+            y: 14
+            width: 120
+            height: 48
+            on_click:
+              - lvgl.page.show:
+                  id: home_page
+                  animation: MOVE_RIGHT
+                  time: 250ms
+            widgets:
+              - label: {align: CENTER, text: "<  Home", text_font: font_body, text_color: 0xFFFFFF}
+        - label:
+            align: TOP_MID
+            y: 22
+            text: "Security"
+            text_font: font_ui_medium
+            text_color: 0xFFFFFF
+        - obj:
+            x: 0
+            y: 64
+            width: 1280
+            height: 736
+            bg_opa: TRANSP
+            border_width: 0
+            radius: 0
+            pad_all: 4
+            scrollable: false
+            layout:
+              type: grid
+              grid_rows: [FR(1), FR(1), FR(1)]
+              grid_columns: [FR(1), FR(1), FR(1), FR(1)]
+              pad_row: 0
+              pad_column: 0
+            widgets:
+              # ---- Front Door lock (col 0, row 0) ----
+              - obj:
+                  styles: cell_style
+                  scrollable: false
+                  grid_cell_column_pos: 0
+                  grid_cell_row_pos: 0
+                  grid_cell_x_align: STRETCH
+                  grid_cell_y_align: STRETCH
+                  widgets:
+                    - obj:
+                        id: card_front_lock
+                        styles: card_style
+                        width: 100%
+                        height: 100%
+                        scrollable: false
+                        clip_corner: true
+                        widgets:
+                          - label: {styles: icon_24, x: 14, y: 10, text: "\U000F033E"}
+                          - label: {styles: title_text, x: 48, y: 8, text: "Front Door"}
+                          - image:
+                              src: img_smart_lock
+                              align: LEFT_MID
+                              x: 28
+                              y: 14
+                          - label:
+                              id: front_lock_status_label
+                              x: 120
+                              y: 76
+                              text: "--"
+                              text_font: font_title
+                              text_color: 0xFFFFFF
+                          - button:
+                              id: front_lock_btn
+                              styles: round_btn
+                              align: BOTTOM_RIGHT
+                              x: -16
+                              y: -16
+                              width: 64
+                              height: 64
+                              bg_color: 0x713F46          # unlocked
+                              checked:
+                                bg_color: 0x276B57        # locked
+                              on_click:
+                                - if:
+                                    condition:
+                                      text_sensor.state:
+                                        id: front_lock_state
+                                        state: "locked"
+                                    then:
+                                      - homeassistant.action:
+                                          action: lock.unlock
+                                          data:
+                                            entity_id: ${front_lock_entity}
+                                    else:
+                                      - homeassistant.action:
+                                          action: lock.lock
+                                          data:
+                                            entity_id: ${front_lock_entity}
+                              widgets:
+                                - label:
+                                    id: front_lock_icon       # locked / unlocked icon
+                                    align: CENTER
+                                    text: "\U000F033E"
+                                    text_font: font_mdi_36
+                                    text_color: 0xFFFFFF
+              # ---- Garage Door lock (col 1, row 0) ----
+              - obj:
+                  styles: cell_style
+                  scrollable: false
+                  grid_cell_column_pos: 1
+                  grid_cell_row_pos: 0
+                  grid_cell_x_align: STRETCH
+                  grid_cell_y_align: STRETCH
+                  widgets:
+                    - obj:
+                        id: card_garage_lock
+                        styles: card_style
+                        width: 100%
+                        height: 100%
+                        scrollable: false
+                        clip_corner: true
+                        widgets:
+                          - label: {styles: icon_24, x: 14, y: 10, text: "\U000F033E"}
+                          - label: {styles: title_text, x: 48, y: 8, text: "Garage Door"}
+                          - image:
+                              src: img_smart_lock
+                              align: LEFT_MID
+                              x: 28
+                              y: 14
+                          - label:
+                              id: garage_lock_status_label
+                              x: 120
+                              y: 76
+                              text: "--"
+                              text_font: font_title
+                              text_color: 0xFFFFFF
+                          - button:
+                              id: garage_lock_btn
+                              styles: round_btn
+                              align: BOTTOM_RIGHT
+                              x: -16
+                              y: -16
+                              width: 64
+                              height: 64
+                              bg_color: 0x713F46          # unlocked
+                              checked:
+                                bg_color: 0x276B57        # locked
+                              on_click:
+                                - if:
+                                    condition:
+                                      text_sensor.state:
+                                        id: garage_lock_state
+                                        state: "locked"
+                                    then:
+                                      - homeassistant.action:
+                                          action: lock.unlock
+                                          data:
+                                            entity_id: ${garage_lock_entity}
+                                    else:
+                                      - homeassistant.action:
+                                          action: lock.lock
+                                          data:
+                                            entity_id: ${garage_lock_entity}
+                              widgets:
+                                - label:
+                                    id: garage_lock_icon       # locked / unlocked icon
+                                    align: CENTER
+                                    text: "\U000F033E"
+                                    text_font: font_mdi_36
+                                    text_color: 0xFFFFFF
+
+              # =====================================================================
+              # 3. GARAGE Roller DOOR                     col 9 span 2 | row 1 span 5
+              # =====================================================================
+              - obj:
+                  styles: cell_style
+                  scrollable: false
+                  grid_cell_column_pos: 2
+                  grid_cell_row_pos: 0
+                  grid_cell_column_span: 1
+                  grid_cell_row_span: 1
+                  grid_cell_x_align: STRETCH
+                  grid_cell_y_align: STRETCH
+                  widgets:
+                    - obj:
+                        id: card_garage
+                        styles: card_style
+                        width: 100%
+                        height: 100%
+                        scrollable: false
+                        widgets:
+                          - label:
+                              x: 42
+                              y: 10
+                              text: "Garage Roller"
+                              text_font: font_small
+                          - label:
+                              id: garage_icon
+                              styles: icon_24
+                              x: 12
+                              y: 10
+                              text: "\U000F06D9"
+                          - obj:          # door position: roller-door slats
+                              align: TOP_MID
+                              id: garage_position_container
+                              y: 52
+                              width: 150
+                              height: 110
+                              radius: 8
+                              bg_color: 0x222B38
+                              border_color: 0x3A4658
+                              border_width: 2
+                              pad_all: 0
+                              scrollable: false
+                              widgets:
+                                # Roller-door curtain: horizontal slats from the top,
+                                # height = closed share of the door (100 - position %).
+                                # Slats stay at the bottom edge, so a shorter curtain
+                                # looks like the door rolling up. The container clips it.
+                                - obj:
+                                    id: garage_door_curtain
+                                    align: TOP_MID
+                                    width: 100%
+                                    height: 100%
+                                    bg_opa: TRANSP
+                                    border_width: 0
+                                    radius: 0
+                                    pad_all: 0
+                                    scrollable: false
+                                    layout:
+                                      type: flex
+                                      flex_flow: COLUMN
+                                      flex_align_main: END
+                                      flex_align_cross: CENTER
+                                      pad_row: 3
+                                    widgets:
+                                      - obj: {styles: garage_slat}
+                                      - obj: {styles: garage_slat}
+                                      - obj: {styles: garage_slat}
+                                      - obj: {styles: garage_slat}
+                                      - obj: {styles: garage_slat}
+                                      - obj: {styles: garage_slat}
+                                      - obj: {styles: garage_slat}
+                                      - obj: {styles: garage_slat}
+                                      - obj: {styles: garage_slat}
+                                      - obj: {styles: garage_slat}
+
+                          # Open / Closed / Partly open, left of the control button
+                          # and centred on it (button centre is 36 px above the
+                          # card bottom).
+                          - label:
+                              id: garage_status_label
+                              align: BOTTOM_RIGHT
+                              x: -72
+                              y: -25
+                              text: "--"
+                              text_font: font_small
+                              text_color: 0xA7B2C4
+                          # One button for the controller's next action (Up / Stop /
+                          # Down); garage_update_button sets its icon and colour.
+                          - button:
+                              id: garage_btn
+                              styles: round_btn
+                              align: BOTTOM_RIGHT
+                              x: -12
+                              y: -12
+                              width: 48
+                              height: 48
+                              bg_color: 0x527FD6
+                              on_click:
+                                - homeassistant.action:
+                                    action: button.press
+                                    data:
+                                      entity_id: !lambda |-
+                                        if (id(garage_next_stop).state) return std::string("${garage_stop_button}");
+                                        if (id(garage_next_down).state) return std::string("${garage_down_button}");
+                                        return std::string("${garage_up_button}");
+                              widgets:
+                                - label:
+                                    id: garage_btn_icon
+                                    align: CENTER
+                                    text: "\U000F0737"
+                                    text_font: font_mdi_24
+                                    text_color: 0xFFFFFF
+
+    # ==================================================================
+    # ENERGY: electricity use (more cards can follow)
+    # Same frame as the Security page: "< Home", the title, and a grid of
+    # cards below the header (y 64-800).
+    # ==================================================================
+    - id: energy_page
+      bg_color: 0x0B1018
+      bg_image_src: img_home_wallpaper
+      scrollable: false
+      on_swipe_right:
+        - lvgl.page.show:
+            id: home_page
+            animation: MOVE_RIGHT
+            time: 250ms
+      widgets:
+        - button:
+            id: energy_page_back_btn
+            styles: scene_btn
+            x: 16
+            y: 14
+            width: 120
+            height: 48
+            on_click:
+              - lvgl.page.show:
+                  id: home_page
+                  animation: MOVE_RIGHT
+                  time: 250ms
+            widgets:
+              - label: {align: CENTER, text: "<  Home", text_font: font_body, text_color: 0xFFFFFF}
+        - label:
+            align: TOP_MID
+            y: 22
+            text: "Energy"
+            text_font: font_ui_medium
+            text_color: 0xFFFFFF
+        - obj:
+            x: 0
+            y: 64
+            width: 1280
+            height: 736
+            bg_opa: TRANSP
+            border_width: 0
+            radius: 0
+            pad_all: 4
+            scrollable: false
+            layout:
+              type: grid
+              grid_rows: [FR(1), FR(1), FR(1)]
+              grid_columns: [FR(1), FR(1), FR(1)]
+              pad_row: 0
+              pad_column: 0
+            widgets:
+              # =====================================================================
+              # 6. ELECTRICITY USAGE               col 1 span 4 | row 1 span 5
+              # =====================================================================
+              - obj:
+                  styles: cell_style
+                  scrollable: false
+                  grid_cell_column_pos: 0
+                  grid_cell_row_pos: 0
+                  grid_cell_column_span: 1
+                  grid_cell_row_span: 1
+                  grid_cell_x_align: STRETCH
+                  grid_cell_y_align: STRETCH
+                  widgets:
+                    - obj:
+                        id: card_electricity
+                        styles: card_style
+                        width: 100%
+                        height: 100%
+                        scrollable: false
+                        widgets:
+                          - label:
+                              styles: icon_24
+                              x: 14
+                              y: 10
+                              text: "\U000F0241"
+                          - label:
+                              styles: title_text
+                              x: 48
+                              y: 8
+                              text: "Electricity"
+                          # Daily energy for the last 14 completed days, oldest on
+                          # the left. fetch_energy_history fills energy_history from
+                          # HA long-term statistics; draw_energy_bars scales the bars
+                          # and the Y axis (kWh) to the busiest day.
+                          - label:
+                              id: elec_axis_max
+                              x: 0
+                              y: 40
+                              width: 31
+                              text: ""
+                              text_align: RIGHT
+                              text_font: font_small
+                              text_color: 0xA7B2C4
+                          - label:
+                              id: elec_axis_mid
+                              x: 0
+                              y: 110
+                              width: 31
+                              text: ""
+                              text_align: RIGHT
+                              text_font: font_small
+                              text_color: 0xA7B2C4
+                          - label:
+                              x: 0
+                              y: 180
+                              width: 31
+                              text: "0"
+                              text_align: RIGHT
+                              text_font: font_small
+                              text_color: 0xA7B2C4
+                          - obj:          # Y axis line
+                              x: 35
+                              y: 48
+                              width: 2
+                              height: 140
+                              radius: 0
+                              border_width: 0
+                              bg_color: 0x34445A
+                          - label:        # axis unit, under the axis
+                              x: 11
+                              y: 200
+                              text: "kWh"
+                              text_font: font_small
+                              text_color: 0x778397
+                          - obj:
+                              id: elec_bars
+                              x: 43
+                              y: 48
+                              width: 180          # 14 bars x 10 px + gaps; ends at x 223, clear of the ring (x ~256)
+                              height: 140
+                              bg_opa: TRANSP
+                              border_width: 0
+                              pad_all: 0
+                              scrollable: false
+                              layout:
+                                type: flex
+                                flex_flow: ROW
+                                flex_align_main: SPACE_BETWEEN
+                                flex_align_cross: END
+                                flex_align_track: END
+                                pad_column: 0     # no theme gap: SPACE_BETWEEN alone spaces the bars
+                              widgets:
+                                - obj: {id: ebar_0, styles: ebar}
+                                - obj: {id: ebar_1, styles: ebar}
+                                - obj: {id: ebar_2, styles: ebar}
+                                - obj: {id: ebar_3, styles: ebar}
+                                - obj: {id: ebar_4, styles: ebar}
+                                - obj: {id: ebar_5, styles: ebar}
+                                - obj: {id: ebar_6, styles: ebar}
+                                - obj: {id: ebar_7, styles: ebar}
+                                - obj: {id: ebar_8, styles: ebar}
+                                - obj: {id: ebar_9, styles: ebar}
+                                - obj: {id: ebar_10, styles: ebar}
+                                - obj: {id: ebar_11, styles: ebar}
+                                - obj: {id: ebar_12, styles: ebar}
+                                - obj: {id: ebar_13, styles: ebar}
+                          # Daily average, centred under the power ring
+                          - label:
+                              id: elec_hist_label
+                              align: RIGHT_MID
+                              x: -4
+                              y: 85
+                              width: 140
+                              text: ""
+                              text_align: CENTER
+                              text_font: font_small
+                              text_color: 0xA7B2C4
+                          - obj:          # ring + live value
+                              align: RIGHT_MID
+                              x: -22
+                              y: 14
+                              width: 104
+                              height: 104
+                              bg_opa: TRANSP
+                              border_width: 0
+                              pad_all: 0
+                              scrollable: false
+                              widgets:
+                                - arc:
+                                    id: elec_arc
+                                    align: CENTER
+                                    width: 104
+                                    height: 104
+                                    min_value: 0
+                                    max_value: ${power_max_w}
+                                    value: 2400
+                                    adjustable: false
+                                    arc_color: 0x29364A
+                                    arc_width: 7
+                                    indicator:
+                                      arc_color: 0x527FD6
+                                      arc_width: 7
+                                - label:
+                                    id: elec_value_label
+                                    align: CENTER
+                                    y: -8
+                                    text: "2.4"
+                                    text_font: font_ui_medium
+                                    text_color: 0xFFFFFF
+                                - label:
+                                    align: CENTER
+                                    y: 16
+                                    text: "kW"
+                                    text_font: font_small
+                                    text_color: 0xA7B2C4
+
+
+    # ==================================================================
+    # ENTERTAINMENT: the media player card
+    # Same frame as the Security page: "< Home", the title, and a grid of
+    # cards below the header (y 64-800).
+    # ==================================================================
+    - id: entertainment_page
+      bg_color: 0x0B1018
+      bg_image_src: img_home_wallpaper
+      scrollable: false
+      on_swipe_right:
+        - lvgl.page.show:
+            id: home_page
+            animation: MOVE_RIGHT
+            time: 250ms
+      widgets:
+        - button:
+            id: entertainment_page_back_btn
+            styles: scene_btn
+            x: 16
+            y: 14
+            width: 120
+            height: 48
+            on_click:
+              - lvgl.page.show:
+                  id: home_page
+                  animation: MOVE_RIGHT
+                  time: 250ms
+            widgets:
+              - label: {align: CENTER, text: "<  Home", text_font: font_body, text_color: 0xFFFFFF}
+        - label:
+            align: TOP_MID
+            y: 22
+            text: "Entertainment"
+            text_font: font_ui_medium
+            text_color: 0xFFFFFF
+        - obj:
+            x: 0
+            y: 64
+            width: 1280
+            height: 736
+            bg_opa: TRANSP
+            border_width: 0
+            radius: 0
+            pad_all: 4
+            scrollable: false
+            layout:
+              type: grid
+              grid_rows: [FR(1), FR(1), FR(1)]
+              grid_columns: [FR(1), FR(1), FR(1)]
+              pad_row: 0
+              pad_column: 0
+            widgets:
+              # =====================================================================
+              # 7. MEDIA PLAYER                    col 9 span 4 | row 6 span 6
+              # The player named in ${media_player_select_entity}. media_poll reads
+              # its state from HA every 3 s while the home page is shown;
+              # media_draw / media_tick fill the widgets.
+              # =====================================================================
+              - obj:
+                  styles: cell_style
+                  scrollable: false
+                  grid_cell_column_pos: 0
+                  grid_cell_row_pos: 0
+                  grid_cell_column_span: 1
+                  grid_cell_row_span: 1
+                  grid_cell_x_align: STRETCH
+                  grid_cell_y_align: STRETCH
+                  widgets:
+                    - obj:
+                        id: card_media
+                        styles: card_style
+                        width: 100%
+                        height: 100%
+                        scrollable: false
+                        # Blue glass: lighter at the top, a brighter blue edge.
+                        bg_color: 0x23335E
+                        bg_grad_color: 0x0F1628
+                        bg_grad_dir: VER
+                        bg_opa: 70%
+                        border_color: 0x4A64B8
+                        widgets:
+                          # Album art, with a vinyl record behind it for when there
+                          # is no (JPEG) art.
+                          - obj:
+                              x: 16
+                              y: 16
+                              width: 120
+                              height: 120
+                              radius: 14
+                              bg_color: 0x1B2A55
+                              bg_grad_color: 0x121A30
+                              bg_grad_dir: VER
+                              border_color: 0x3A4F80
+                              border_width: 1
+                              pad_all: 0
+                              clip_corner: true
+                              scrollable: false
+                              widgets:
+                                - obj:
+                                    align: CENTER
+                                    width: 104
+                                    height: 104
+                                    radius: 52
+                                    bg_color: 0x2563EB
+                                    bg_grad_color: 0x9333EA
+                                    bg_grad_dir: VER
+                                    border_color: 0x1E293B
+                                    border_width: 1
+                                    scrollable: false
+                                - obj:      # groove ring
+                                    align: CENTER
+                                    width: 70
+                                    height: 70
+                                    radius: 35
+                                    bg_opa: TRANSP
+                                    border_color: 0x93C5FD
+                                    border_opa: 40%
+                                    border_width: 1
+                                    scrollable: false
+                                - obj:      # label
+                                    align: CENTER
+                                    width: 36
+                                    height: 36
+                                    radius: 18
+                                    bg_color: 0x1E2A44
+                                    border_color: 0x0F172A
+                                    border_width: 2
+                                    scrollable: false
+                                - obj:      # spindle hole
+                                    align: CENTER
+                                    width: 8
+                                    height: 8
+                                    radius: 4
+                                    bg_color: 0x0B1018
+                                    border_width: 0
+                                - image:
+                                    id: media_art
+                                    src: media_art_img
+                                    align: CENTER
+                                    hidden: true
+                          # Title / artist / album all use music_title_font (22 px,
+                          # with Chinese); colour sets them apart.
+                          - label:
+                              id: media_title_label
+                              x: 150
+                              y: 14
+                              width: 216
+                              text: "Nothing playing"
+                              text_font: music_title_font
+                              text_color: 0xFFFFFF
+                              long_mode: DOT
+                          - label:
+                              id: media_artist_label
+                              x: 150
+                              y: 46
+                              width: 216
+                              text: ""
+                              text_font: music_title_font
+                              text_color: 0x9DB4FF
+                              long_mode: DOT
+                          - label:
+                              id: media_album_label
+                              x: 150
+                              y: 76
+                              width: 216
+                              text: ""
+                              text_font: music_title_font
+                              text_color: 0x7183A8
+                              long_mode: DOT
+                          # Progress; drag and release to seek.
+                          - slider:
+                              id: media_seek_slider
+                              x: 152
+                              y: 112
+                              width: 208
+                              height: 6
+                              min_value: 0
+                              max_value: 1000
+                              value: 0
+                              bg_color: 0x2A3550
+                              bg_opa: COVER
+                              radius: 3
+                              indicator:
+                                bg_color: 0x3B82F6
+                                bg_grad_color: 0xC4B5FD
+                                bg_grad_dir: HOR
+                                radius: 3
+                              knob:
+                                bg_color: 0xFFFFFF
+                                pad_all: 3
+                                radius: 100
+                              on_release:
+                                - if:
+                                    condition:
+                                      lambda: |-
+                                        return id(media_duration) > 0 &&
+                                               id(media_entity).state.rfind("media_player.", 0) == 0;
+                                    then:
+                                      - lambda: |-
+                                          id(media_pos) = x / 1000.0f * id(media_duration);
+                                          id(media_pos_at) = id(my_time).now().timestamp;
+                                      - homeassistant.action:
+                                          action: media_player.media_seek
+                                          data:
+                                            entity_id: !lambda 'return id(media_entity).state;'
+                                            seek_position: !lambda |-
+                                              char buf[16];
+                                              snprintf(buf, sizeof(buf), "%.1f", id(media_pos));
+                                              return std::string(buf);
+                                      - script.execute: media_tick
+                          - label:
+                              id: media_elapsed_label
+                              x: 150
+                              y: 126
+                              text: "--:--"
+                              text_font: font_small
+                              text_color: 0x9DB4FF
+                          - label:
+                              id: media_duration_label
+                              x: 286
+                              y: 126
+                              width: 80
+                              text: "--:--"
+                              text_align: RIGHT
+                              text_font: font_small
+                              text_color: 0x9DB4FF
+                          - button:
+                              id: media_prev_btn
+                              styles: round_btn
+                              align: BOTTOM_MID
+                              x: -84
+                              y: -16
+                              width: 48
+                              height: 48
+                              bg_color: 0x1A2333
+                              border_color: 0x2F3B52
+                              border_width: 1
+                              on_click:
+                                - script.execute:
+                                    id: media_command
+                                    service: media_player.media_previous_track
+                              widgets:
+                                - label: {align: CENTER, text: "\U000F04AE", text_font: font_mdi_24, text_color: 0xFFFFFF}
+                          # Play / pause: glowing blue-purple ring like the mockup.
+                          - button:
+                              id: media_play_btn
+                              styles: round_btn
+                              align: BOTTOM_MID
+                              y: -10
+                              width: 60
+                              height: 60
+                              bg_color: 0x141B2B
+                              border_color: 0x8B7CF6
+                              border_width: 3
+                              shadow_color: 0x6366F1
+                              shadow_width: 16
+                              shadow_opa: 50%
+                              on_click:
+                                - if:
+                                    # Nothing loaded (idle/off, or no track): start
+                                    # the default playlist instead of play/pause.
+                                    condition:
+                                      lambda: |-
+                                        const std::string &st = id(media_state);
+                                        const bool loaded = st == "playing" || st == "paused" || st == "buffering";
+                                        return !loaded || id(media_title).empty();
+                                    then:
+                                      - script.execute: media_play_default
+                                    else:
+                                      # Show the new state at once; the next poll confirms it.
+                                      - lambda: |-
+                                          const time_t now = id(my_time).now().timestamp;
+                                          if (id(media_state) == "playing") {
+                                            if (id(media_pos_at) > 0) id(media_pos) += now - id(media_pos_at);
+                                            id(media_state) = "paused";
+                                          } else {
+                                            id(media_state) = "playing";
+                                          }
+                                          id(media_pos_at) = now;
+                                      - script.execute: media_draw
+                                      - script.execute:
+                                          id: media_command
+                                          service: media_player.media_play_pause
+                              widgets:
+                                - label: {id: media_play_icon, align: CENTER, text: "\U000F040A", text_font: font_mdi_36, text_color: 0xFFFFFF}
+                          - button:
+                              id: media_next_btn
+                              styles: round_btn
+                              align: BOTTOM_MID
+                              x: 84
+                              y: -16
+                              width: 48
+                              height: 48
+                              bg_color: 0x1A2333
+                              border_color: 0x2F3B52
+                              border_width: 1
+                              on_click:
+                                - script.execute:
+                                    id: media_command
+                                    service: media_player.media_next_track
+                              widgets:
+                                - label: {align: CENTER, text: "\U000F04AD", text_font: font_mdi_24, text_color: 0xFFFFFF}
+
+
+    # ==================================================================
+    # INTERCOM: the VoIP intercom card; shown automatically when a call comes in
+    # Same frame as the Security page: "< Home", the title, and a grid of
+    # cards below the header (y 64-800).
+    # ==================================================================
+    - id: intercom_page
+      bg_color: 0x0B1018
+      bg_image_src: img_home_wallpaper
+      scrollable: false
+      on_swipe_right:
+        - lvgl.page.show:
+            id: home_page
+            animation: MOVE_RIGHT
+            time: 250ms
+      widgets:
+        - button:
+            id: intercom_page_back_btn
+            styles: scene_btn
+            x: 16
+            y: 14
+            width: 120
+            height: 48
+            on_click:
+              - lvgl.page.show:
+                  id: home_page
+                  animation: MOVE_RIGHT
+                  time: 250ms
+            widgets:
+              - label: {align: CENTER, text: "<  Home", text_font: font_body, text_color: 0xFFFFFF}
+        - label:
+            align: TOP_MID
+            y: 22
+            text: "Intercom"
+            text_font: font_ui_medium
+            text_color: 0xFFFFFF
+        - obj:
+            x: 0
+            y: 64
+            width: 1280
+            height: 736
+            bg_opa: TRANSP
+            border_width: 0
+            radius: 0
+            pad_all: 4
+            scrollable: false
+            layout:
+              type: grid
+              grid_rows: [FR(1), FR(1), FR(1)]
+              grid_columns: [FR(1), FR(1), FR(1)]
+              pad_row: 0
+              pad_column: 0
+            widgets:
+              # =====================================================================
+              # 5. INTERCOM                        col 11 span 2 | row 1 span 5
+              # =====================================================================
+              - obj:
+                  styles: cell_style
+                  scrollable: false
+                  grid_cell_column_pos: 0
+                  grid_cell_row_pos: 0
+                  grid_cell_column_span: 1
+                  grid_cell_row_span: 1
+                  grid_cell_x_align: STRETCH
+                  grid_cell_y_align: STRETCH
+                  widgets:
+                    # VoIP panel. Sized by the grid cell (about 412x230); the call-state
+                    # groups fill the card and update_call_tile shows one at a time.
+                    - obj:
+                        id: voip_tile
+                        styles: card_style
+                        width: 100%
+                        height: 100%
+                        scrollable: false
+                        scrollbar_mode: "off"
+                        clip_corner: true
+                        widgets:
+                          - label:
+                              styles: icon_24
+                              x: 14
+                              y: 10
+                              text: "\U000F0869"
+                          - label:
+                              styles: title_text
+                              x: 48
+                              y: 8
+                              text: "Intercom"
+
+                          # ---- idle: contact browser ----
+                          - obj:
+                              id: call_idle_group
+                              align: TOP_RIGHT
+                              width: 100%
+                              height: 100%
+                              bg_opa: TRANSP
+                              border_width: 0
+                              radius: 0
+                              pad_all: 0
+                              scrollable: false
+                              scrollbar_mode: "off"
+                              widgets:
+                                - label:
+                                    id: call_idle_header_label
+                                    align: TOP_RIGHT
+                                    x: -14
+                                    y: 44
+                                    text: "Keypad"
+                                    text_color: 0x8DAEFF
+                                    text_font: font_small
+                                    clickable: true
+                                    gesture_bubble: false
+                                    on_click:
+                                      - script.execute: show_voip_keypad
+                                - obj:
+                                    id: call_idle_header_rule
+                                    align: TOP_RIGHT
+                                    x: -14
+                                    y: 64
+                                    width: 54
+                                    height: 2
+                                    bg_color: 0x8DAEFF
+                                    border_width: 0
+                                    radius: 1
+                                - label:
+                                    id: call_idle_peer_label
+                                    align: TOP_MID
+                                    y: 80
+                                    width: 165
+                                    text: "-"
+                                    text_color: 0xFFFFFF
+                                    text_font: font_small_18
+                                    text_align: CENTER
+                                    long_mode: DOT
+                                - label:
+                                    id: call_idle_contacts_label
+                                    align: TOP_MID
+                                    y: 108
+                                    text: "Contacts: 0"
+                                    text_color: 0x8995A7
+                                    text_font: font_small
+                                - label:
+                                    id: call_idle_hint_label
+                                    align: TOP_MID
+                                    y: 134
+                                    width: 165
+                                    text: "Swipe to browse"
+                                    text_color: 0x778397
+                                    text_font: font_small
+                                    text_align: CENTER
+                                    long_mode: DOT
+                                - obj:
+                                    id: call_idle_swipe_area
+                                    align: TOP_MID
+                                    y: 74
+                                    width: 100%
+                                    height: 86
+                                    bg_opa: TRANSP
+                                    border_width: 0
+                                    scrollable: false
+                                    clickable: true
+                                    gesture_bubble: false
+                                    on_swipe_left:
+                                      - voip_stack.next_contact:
+                                      - script.execute: update_ic_idle_labels
+                                    on_swipe_right:
+                                      - voip_stack.prev_contact:
+                                      - script.execute: update_ic_idle_labels
+                                - button:
+                                    id: call_button_widget
+                                    align: BOTTOM_MID
+                                    y: -12
+                                    width: 78
+                                    height: 58
+                                    bg_color: 0x43A982
+                                    radius: 9
+                                    on_click:
+                                      - voip_stack.call_toggle:
+                                    widgets:
+                                      - label:
+                                          align: CENTER
+                                          text: "\U000F03F2"
+                                          text_color: 0xFFFFFF
+                                          text_font: font_action_icon
+
+                          # ---- idle: dial keypad (slides in over the contact browser) ----
+                          - obj:
+                              id: call_keypad_group
+                              align: TOP_RIGHT
+                              width: 100%
+                              height: 100%
+                              bg_color: 0x151D2B
+                              border_width: 0
+                              radius: 0
+                              pad_all: 0
+                              scrollable: false
+                              clickable: true
+                              gesture_bubble: false
+                              hidden: true
+                              widgets:
+                                - label:
+                                    id: call_keypad_value_label
+                                    align: TOP_LEFT
+                                    x: 8
+                                    y: 12
+                                    width: 92
+                                    text: "Enter number"
+                                    text_color: 0xFFFFFF
+                                    text_font: font_small
+                                    long_mode: DOT
+                                - label:
+                                    id: call_keypad_header_label
+                                    align: TOP_RIGHT
+                                    x: -14
+                                    y: 12
+                                    text: "Contacts"
+                                    text_color: 0x8DAEFF
+                                    text_font: font_small
+                                    clickable: true
+                                    gesture_bubble: false
+                                    on_click:
+                                      - script.execute: hide_voip_keypad
+                                - obj:
+                                    id: call_keypad_header_rule
+                                    align: TOP_RIGHT
+                                    x: -14
+                                    y: 32
+                                    width: 66
+                                    height: 2
+                                    bg_color: 0x8DAEFF
+                                    border_width: 0
+                                    radius: 1
+                                - buttonmatrix:
+                                    id: call_keypad_matrix
+                                    align: TOP_MID
+                                    y: 38
+                                    width: 169
+                                    height: 138
+                                    bg_opa: TRANSP
+                                    border_width: 0
+                                    pad_all: 0
+                                    pad_row: 6
+                                    pad_column: 6
+                                    gesture_bubble: true
+                                    items:
+                                      bg_color: 0x202B3B
+                                      text_color: 0xFFFFFF
+                                      text_font: font_body
+                                      radius: 8
+                                    rows:
+                                      - buttons:
+                                          - text: "1"
+                                          - text: "2"
+                                          - text: "3"
+                                      - buttons:
+                                          - text: "4"
+                                          - text: "5"
+                                          - text: "6"
+                                      - buttons:
+                                          - text: "7"
+                                          - text: "8"
+                                          - text: "9"
+                                      - buttons:
+                                          - text: "*"
+                                          - text: "0"
+                                          - text: "#"
+                                    on_click:
+                                      - lambda: |-
+                                          static constexpr char KEYS[] = "123456789*0#";
+                                          if (x >= 12 || id(voip_dial_buffer).size() >= 32) return;
+                                          id(voip_dial_buffer).push_back(KEYS[x]);
+                                          lv_label_set_text(id(call_keypad_value_label), id(voip_dial_buffer).c_str());
+                                - button:
+                                    align: BOTTOM_LEFT
+                                    x: 8
+                                    y: -8
+                                    width: 52
+                                    height: 42
+                                    bg_color: 0x202B3B
+                                    radius: 8
+                                    on_click:
+                                      - lambda: |-
+                                          id(voip_dial_buffer).clear();
+                                          lv_label_set_text(id(call_keypad_value_label), "Enter number");
+                                    widgets:
+                                      - label:
+                                          align: CENTER
+                                          text: "CLEAR"
+                                          text_color: 0xDCE3ED
+                                          text_font: font_small
+                                - button:
+                                    align: BOTTOM_MID
+                                    y: -8
+                                    width: 60
+                                    height: 42
+                                    bg_color: 0x43A982
+                                    radius: 8
+                                    on_click:
+                                      - if:
+                                          condition:
+                                            lambda: return !id(voip_dial_buffer).empty();
+                                          then:
+                                            - voip_stack.call:
+                                                target: !lambda 'return id(voip_dial_buffer);'
+                                            - lambda: |-
+                                                id(voip_dial_buffer).clear();
+                                                lv_label_set_text(id(call_keypad_value_label), "Enter number");
+                                    widgets:
+                                      - label:
+                                          align: CENTER
+                                          text: "\U000F03F2"
+                                          text_color: 0xFFFFFF
+                                          text_font: font_mdi_24
+                                - button:
+                                    align: BOTTOM_RIGHT
+                                    x: -8
+                                    y: -8
+                                    width: 52
+                                    height: 42
+                                    bg_color: 0x202B3B
+                                    radius: 8
+                                    on_click:
+                                      - lambda: |-
+                                          if (!id(voip_dial_buffer).empty()) id(voip_dial_buffer).pop_back();
+                                          lv_label_set_text(id(call_keypad_value_label), id(voip_dial_buffer).empty()
+                                              ? "Enter number" : id(voip_dial_buffer).c_str());
+                                    widgets:
+                                      - label:
+                                          align: CENTER
+                                          text: "DEL"
+                                          text_color: 0xDCE3ED
+                                          text_font: font_small
+
+                          # ---- incoming call ----
+                          - obj:
+                              id: call_ringing_in_group
+                              align: TOP_RIGHT
+                              width: 100%
+                              height: 100%
+                              bg_color: 0x2B1A22
+                              border_width: 0
+                              radius: 0
+                              pad_all: 0
+                              scrollable: false
+                              hidden: true
+                              widgets:
+                                - label:
+                                    align: TOP_MID
+                                    y: 14
+                                    text: "Incoming call"
+                                    text_color: 0xE47B86
+                                    text_font: font_ui_medium
+                                - label:
+                                    id: call_ringing_in_peer_label
+                                    align: CENTER
+                                    y: -20
+                                    width: 165
+                                    text: ""
+                                    text_color: 0xFFFFFF
+                                    text_font: font_small_18
+                                    text_align: CENTER
+                                    long_mode: DOT
+                                - button:
+                                    align: BOTTOM_LEFT
+                                    x: 8
+                                    y: -14
+                                    width: 80
+                                    height: 56
+                                    bg_color: 0x43A982
+                                    radius: 9
+                                    on_click:
+                                      - voip_stack.answer_call:
+                                    widgets:
+                                      - label:
+                                          align: CENTER
+                                          text: "ANSWER"
+                                          text_color: 0xFFFFFF
+                                          text_font: font_small_18
+                                - button:
+                                    align: BOTTOM_RIGHT
+                                    x: -8
+                                    y: -14
+                                    width: 80
+                                    height: 56
+                                    bg_color: 0xD65B64
+                                    radius: 9
+                                    on_click:
+                                      - voip_stack.decline_call:
+                                    widgets:
+                                      - label:
+                                          align: CENTER
+                                          text: "DECLINE"
+                                          text_color: 0xFFFFFF
+                                          text_font: font_small_18
+
+                          # ---- outgoing call ----
+                          - obj:
+                              id: call_ringing_out_group
+                              align: TOP_RIGHT
+                              width: 100%
+                              height: 100%
+                              bg_color: 0x2A241C
+                              border_width: 0
+                              radius: 0
+                              pad_all: 0
+                              scrollable: false
+                              hidden: true
+                              widgets:
+                                - label:
+                                    id: call_ringing_out_status_label
+                                    align: TOP_MID
+                                    y: 14
+                                    text: "CALLING"
+                                    text_color: 0xD6A35D
+                                    text_font: font_ui_medium
+                                - label:
+                                    id: call_ringing_out_peer_label
+                                    align: CENTER
+                                    y: -24
+                                    width: 165
+                                    text: ""
+                                    text_color: 0xFFFFFF
+                                    text_font: font_title
+                                    text_align: CENTER
+                                    long_mode: DOT
+                                - label:
+                                    align: CENTER
+                                    y: 14
+                                    text: "Waiting for answer"
+                                    text_color: 0xC5CEDA
+                                    text_font: font_small
+                                - button:
+                                    align: BOTTOM_MID
+                                    y: -14
+                                    width: 150
+                                    height: 56
+                                    bg_color: 0xD65B64
+                                    radius: 9
+                                    on_click:
+                                      - voip_stack.call_toggle:
+                                    widgets:
+                                      - label:
+                                          align: CENTER
+                                          text: "HANG UP"
+                                          text_color: 0xFFFFFF
+                                          text_font: font_body
+
+                          # ---- in call ----
+                          - obj:
+                              id: call_in_call_group
+                              align: TOP_RIGHT
+                              width: 100%
+                              height: 100%
+                              bg_color: 0x172A25
+                              border_width: 0
+                              radius: 0
+                              pad_all: 0
+                              scrollable: false
+                              hidden: true
+                              widgets:
+                                - label:
+                                    align: TOP_MID
+                                    y: 14
+                                    text: "In call"
+                                    text_color: 0x43A982
+                                    text_font: font_ui_medium
+                                - label:
+                                    id: p4_call_media_route_label
+                                    align: TOP_MID
+                                    y: 46
+                                    width: 90%
+                                    text: ""
+                                    text_color: 0x9BA8B9
+                                    text_font: font_small
+                                    text_align: CENTER
+                                    long_mode: DOT
+                                - label:
+                                    id: call_in_call_peer_label
+                                    align: CENTER
+                                    y: -4
+                                    width: 165
+                                    text: ""
+                                    text_color: 0xFFFFFF
+                                    text_font: font_title
+                                    text_align: CENTER
+                                    long_mode: DOT
+                                - button:
+                                    align: BOTTOM_MID
+                                    y: -14
+                                    width: 150
+                                    height: 56
+                                    bg_color: 0xD65B64
+                                    radius: 9
+                                    on_click:
+                                      - voip_stack.call_toggle:
+                                    widgets:
+                                      - label:
+                                          align: CENTER
+                                          text: "HANG UP"
+                                          text_color: 0xFFFFFF
+                                          text_font: font_body
+
+                          # ---- call ended (shown ~4 s) ----
+                          - obj:
+                              id: call_ended_group
+                              align: TOP_RIGHT
+                              width: 100%
+                              height: 100%
+                              bg_color: 0x202833
+                              border_width: 0
+                              radius: 0
+                              pad_all: 0
+                              scrollable: false
+                              hidden: true
+                              widgets:
+                                - label:
+                                    id: call_ended_peer_label
+                                    align: CENTER
+                                    y: -30
+                                    width: 165
+                                    text: ""
+                                    text_color: 0xFFFFFF
+                                    text_font: font_ui_medium
+                                    text_align: CENTER
+                                    long_mode: WRAP
+                                - label:
+                                    id: call_ended_reason_label
+                                    align: CENTER
+                                    y: 30
+                                    width: 165
+                                    text: ""
+                                    text_color: 0xE2C17B
+                                    text_font: font_small
+                                    text_align: CENTER
+                                    long_mode: WRAP
+
+
     # ==================================================================
     # SETTINGS: one scrollable landscape page. Opened from the sidebar or a
     # swipe up on the home page; swipe down returns to the home page.
@@ -4422,7 +4654,34 @@ script:
             - delay: 800ms
             - script.execute: media_poll
 
-  # Home page clock card: time, day and date (no seconds shown).
+  # Media card play button with an empty queue: shuffle on, then play the
+  # ${media_default_playlist} playlist through Music Assistant.
+  - id: media_play_default
+    mode: single
+    then:
+      - if:
+          condition:
+            lambda: return id(media_entity).state.rfind("media_player.", 0) == 0;
+          then:
+            - lvgl.label.update:
+                id: media_title_label
+                text: "Starting playlist..."
+            - homeassistant.action:
+                action: media_player.shuffle_set
+                data:
+                  entity_id: !lambda 'return id(media_entity).state;'
+                  shuffle: "true"
+            - homeassistant.action:
+                action: music_assistant.play_media
+                data:
+                  entity_id: !lambda 'return id(media_entity).state;'
+                  media_id: ${media_default_playlist}
+                  media_type: playlist
+                  enqueue: replace
+            - delay: 1500ms
+            - script.execute: media_poll
+
+  # Home page clock card: time only (no seconds).
   - id: update_clock
     then:
       - if:
@@ -4433,12 +4692,6 @@ script:
             - lvgl.label.update:
                 id: clock_time_label
                 text: !lambda 'return id(my_time).now().strftime("%H:%M");'
-            - lvgl.label.update:
-                id: clock_day_label
-                text: !lambda 'return id(my_time).now().strftime("%A");'
-            - lvgl.label.update:
-                id: clock_date_label
-                text: !lambda 'return id(my_time).now().strftime("%d %B");'
 
   # Download the latest Frigate snapshot through HA's image proxy. The short
   # delay lets the new entity_picture token arrive with the new state.
@@ -4867,18 +5120,22 @@ script:
             }
           }
 
-  # Back to the home page (from the video page, or when a call needs it). The
-  # settings and camera pages stay open while the phone is idle.
+  # Page for the call state. A ringing, outgoing or active call shows the
+  # Intercom page (unless the video page is already showing the call); once
+  # the phone is idle the video page goes back to the Intercom page and any
+  # other page stays as it is.
   - id: show_phone_page
     mode: restart
     then:
       - lambda: |-
           lv_obj_t *scr = lv_disp_get_scr_act(nullptr);
-          const bool keep_page = (scr == id(settings_p4_page)->obj ||
-                                  scr == id(cam_front_page)->obj ||
-                                  scr == id(cam_driveway_page)->obj) && id(phone).is_idle();
-          if (scr != id(home_page)->obj && !keep_page)
-            lv_disp_load_scr(id(home_page)->obj);
+          lv_obj_t *intercom = id(intercom_page)->obj;
+          if (!id(phone).is_idle()) {
+            if (scr != intercom && scr != id(call_video_page)->obj)
+              lv_disp_load_scr(intercom);
+          } else if (scr == id(call_video_page)->obj) {
+            lv_disp_load_scr(intercom);
+          }
       - script.execute: update_call_tile
 
   # Called by p4_video_renderer on the first remote frame.
@@ -5561,11 +5818,6 @@ sensor:
     entity_id: ${garage_position_entity}
     internal: true
     on_value:
-      - lvgl.label.update:
-          id: garage_position_label
-          text:
-            format: "%.0f%%"
-            args: ['x']
       # Position 100 % = fully open (no slats), 0 % = closed (frame full).
       - lambda: |-
           int pos = (int) x;
@@ -5809,6 +6061,13 @@ text_sensor:
       - lvgl.label.update:
           id: front_lock_icon
           text: !lambda 'return std::string(x == "locked" ? "\U000F033E" : "\U000F033F");'
+      # Security page: "Locked", "Unlocked", "Jammed"...
+      - lvgl.label.update:
+          id: front_lock_status_label
+          text: !lambda |-
+            std::string s = x;
+            if (!s.empty()) s[0] = toupper(s[0]);
+            return s;
 
   - platform: homeassistant
     id: garage_lock_state
@@ -5822,6 +6081,12 @@ text_sensor:
       - lvgl.label.update:
           id: garage_lock_icon
           text: !lambda 'return std::string(x == "locked" ? "\U000F033E" : "\U000F033F");'
+      - lvgl.label.update:
+          id: garage_lock_status_label
+          text: !lambda |-
+            std::string s = x;
+            if (!s.empty()) s[0] = toupper(s[0]);
+            return s;
 
 interval:
   # Top-right Wi-Fi / C6 status
@@ -5834,20 +6099,20 @@ interval:
     then:
       - script.execute: light_tiles_check
 
-  # Media card: re-read the player state while the home page is shown, and
+  # Media card: re-read the player state while the Entertainment page is shown, and
   # move the progress bar every second while playing.
   - interval: 3s
     then:
       - if:
           condition:
-            lambda: return id(home_page)->is_showing();
+            lambda: return id(entertainment_page)->is_showing();
           then:
             - script.execute: media_poll
   - interval: 1s
     then:
       - if:
           condition:
-            lambda: return id(home_page)->is_showing() && id(media_state) == "playing";
+            lambda: return id(entertainment_page)->is_showing() && id(media_state) == "playing";
           then:
             - script.execute: media_tick
 
