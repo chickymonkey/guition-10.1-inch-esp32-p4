@@ -370,8 +370,20 @@ time:
     id: my_time
     timezone: Australia/Sydney
     # Show the clock as soon as the time is known, not at the next 45 s tick.
+    # The history fetches need the time, which can arrive after the API
+    # connects (on_client_connected then skips them); fetch here if still empty.
     on_time_sync:
       - script.execute: update_clock
+      - if:
+          condition:
+            lambda: return std::isnan(id(energy_history)[13]);
+          then:
+            - script.execute: fetch_energy_history
+      - if:
+          condition:
+            lambda: return std::isnan(id(soil_history)[1]);
+          then:
+            - script.execute: fetch_soil_history
     on_time:
       # Just after midnight yesterday's total is final: refresh the 14 bars.
       - seconds: 0
@@ -845,6 +857,7 @@ font:
       - "\U000F04AE"  # skip-previous (Media card)
       - "\U000F04AD"  # skip-next (Media card)
       - "\U000F040A"  # play (sidebar Media tab)
+      - "\U000F057E"  # volume-high (Media card volume)
       - "\U000F0374"  # minus (heater target)
       - "\U000F0415"  # plus (heater target)
       - "\U000F0717"  # snowflake (heater Cool)
@@ -902,7 +915,7 @@ image:
     transparency: alpha_channel
     byte_order: little_endian
   - platform: file
-    file: ${images_base}home_wallpaper.jpg?v=2
+    file: ${images_base}home_wallpaper.jpg?v=4
     id: img_home_wallpaper
     resize: 1280x800
     type: RGB565
@@ -1393,7 +1406,7 @@ lvgl:
                     - label: {align: BOTTOM_MID, y: -2, text: "Settings", text_font: font_small}
 
         # =====================================================================
-        # 1. DIGITAL CLOCK (same width as Cameras)   col 1 span 5 | row 1
+        # 1. DIGITAL CLOCK col 1 span 5 | row 1
         # =====================================================================
         - obj:
             styles: cell_style
@@ -1424,9 +1437,27 @@ lvgl:
                     - label:
                         id: clock_time_label
                         align: CENTER
+                        y: -14
                         text: "--:--"
                         text_font: font_clock_big
                         text_color: 0xFFFFFF
+                    # Bottom row: day on the left, date (no year) on the right
+                    - label:
+                        id: clock_day_label
+                        align: BOTTOM_LEFT
+                        x: 24
+                        y: -20
+                        text: ""
+                        text_font: font_ui_medium
+                        text_color: 0xFFFFFF
+                    - label:
+                        id: clock_date_label
+                        align: BOTTOM_RIGHT
+                        x: -24
+                        y: -20
+                        text: ""
+                        text_font: font_ui_medium
+                        text_color: 0xD0D9EA
 
         # =====================================================================
         # 2. GAS HEATER (card about 677x384)       col 6 span 7 | row 1
@@ -1703,6 +1734,9 @@ lvgl:
                   width: 100%
                   height: 100%
                   scrollable: false
+                  border_color: 0x34D399      # green
+                  border_opa: 60%
+                  border_width: 2
                   widgets:
                     - label:
                         styles: icon_24
@@ -1849,6 +1883,9 @@ lvgl:
                   width: 100%
                   height: 100%
                   scrollable: false
+                  border_color: 0xF59E0B      # orange
+                  border_opa: 60%
+                  border_width: 2
                   widgets:
                     - label:
                         styles: icon_24
@@ -1982,6 +2019,9 @@ lvgl:
                   width: 100%
                   height: 100%
                   scrollable: false
+                  border_color: 0x8B5CF6      # purple
+                  border_opa: 60%
+                  border_width: 2
                   widgets:
                     - label:
                         styles: icon_24
@@ -3062,12 +3102,60 @@ lvgl:
                               text_font: music_title_font
                               text_color: 0x7183A8
                               long_mode: DOT
-                          # Progress; drag and release to seek.
+                          # Volume: speaker icon and a horizontal slider under
+                          # the album line (same size as the progress bar).
+                          # Release sets the player volume.
+                          - label:
+                              x: 150
+                              y: 102
+                              text: "\U000F057E"      # volume-high
+                              text_font: font_mdi_24
+                              text_color: 0x9DB4FF
+                          - slider:
+                              id: media_volume_slider
+                              x: 182
+                              y: 111
+                              width: 208
+                              height: 6
+                              min_value: 0
+                              max_value: 100
+                              value: 0
+                              bg_color: 0x2A3550
+                              bg_opa: COVER
+                              radius: 3
+                              indicator:
+                                bg_color: 0x3B82F6
+                                bg_grad_color: 0xC4B5FD
+                                bg_grad_dir: HOR
+                                radius: 3
+                              knob:
+                                bg_color: 0xFFFFFF
+                                pad_all: 3
+                                radius: 100
+                              on_release:
+                                - if:
+                                    condition:
+                                      lambda: return id(media_entity).state.rfind("media_player.", 0) == 0;
+                                    then:
+                                      - lambda: id(media_volume) = x / 100.0f;
+                                      - homeassistant.action:
+                                          action: media_player.volume_set
+                                          data:
+                                            entity_id: !lambda 'return id(media_entity).state;'
+                                            volume_level: !lambda |-
+                                              char buf[8];
+                                              snprintf(buf, sizeof(buf), "%.2f", id(media_volume));
+                                              return std::string(buf);
+                          # Progress along the bottom of the card, from the left
+                          # edge of the album art (x 16) to the right end of the
+                          # volume bar (x 390); elapsed / duration sit above its
+                          # two ends. Drag and release to seek.
                           - slider:
                               id: media_seek_slider
-                              x: 152
-                              y: 112
-                              width: 208
+                              align: BOTTOM_LEFT
+                              x: 16
+                              y: -18
+                              width: 374
                               height: 6
                               min_value: 0
                               max_value: 1000
@@ -3105,26 +3193,31 @@ lvgl:
                                       - script.execute: media_tick
                           - label:
                               id: media_elapsed_label
-                              x: 150
-                              y: 126
+                              align: BOTTOM_LEFT
+                              x: 16
+                              y: -30
+                              width: 64
                               text: "--:--"
+                              text_align: LEFT
                               text_font: font_small
                               text_color: 0x9DB4FF
                           - label:
                               id: media_duration_label
-                              x: 286
-                              y: 126
-                              width: 80
+                              align: BOTTOM_LEFT
+                              x: 326
+                              y: -30
+                              width: 64
                               text: "--:--"
                               text_align: RIGHT
                               text_font: font_small
                               text_color: 0x9DB4FF
+                          # Controls between the volume row and the progress bar.
                           - button:
                               id: media_prev_btn
                               styles: round_btn
-                              align: BOTTOM_MID
+                              align: TOP_MID
                               x: -84
-                              y: -16
+                              y: 142
                               width: 48
                               height: 48
                               bg_color: 0x1A2333
@@ -3140,8 +3233,8 @@ lvgl:
                           - button:
                               id: media_play_btn
                               styles: round_btn
-                              align: BOTTOM_MID
-                              y: -10
+                              align: TOP_MID
+                              y: 136
                               width: 60
                               height: 60
                               bg_color: 0x141B2B
@@ -3181,9 +3274,9 @@ lvgl:
                           - button:
                               id: media_next_btn
                               styles: round_btn
-                              align: BOTTOM_MID
+                              align: TOP_MID
                               x: 84
-                              y: -16
+                              y: 142
                               width: 48
                               height: 48
                               bg_color: 0x1A2333
@@ -4445,12 +4538,14 @@ globals:
   - id: energy_history
     type: float[14]
     restore_value: false
+    initial_value: "{NAN, NAN, NAN, NAN, NAN, NAN, NAN, NAN, NAN, NAN, NAN, NAN, NAN, NAN}"
 
   # Soil moisture 9-10 am average: [0] two days ago, [1] yesterday; NAN = no
   # data. Filled by fetch_soil_history.
   - id: soil_history
     type: float[2]
     restore_value: false
+    initial_value: "{NAN, NAN}"
 
   # True once a snapshot tile has its first picture; until then a new
   # entity_picture token alone also triggers a download.
@@ -4509,6 +4604,11 @@ globals:
     type: int64_t
     restore_value: false
     initial_value: "0"
+  # Player volume 0-1 (NAN until HA reports it).
+  - id: media_volume
+    type: float
+    restore_value: false
+    initial_value: "NAN"
 
 script:
   # Media card: read the selected player's state from HA's REST API
@@ -4541,7 +4641,7 @@ script:
                         JsonObject fa = filter["attributes"].to<JsonObject>();
                         for (const char *k : {"media_title", "media_artist", "media_album_name", "media_duration",
                                               "media_position", "media_position_updated_at", "entity_picture",
-                                              "friendly_name"})
+                                              "friendly_name", "volume_level"})
                           fa[k] = true;
                         JsonDocument doc;
                         const auto err = deserializeJson(doc, body, DeserializationOption::Filter(filter));
@@ -4557,6 +4657,7 @@ script:
                         id(media_name) = a["friendly_name"] | "";
                         id(media_duration) = a["media_duration"] | 0.0f;
                         id(media_pos) = a["media_position"] | 0.0f;
+                        id(media_volume) = a["volume_level"] | NAN;
                         // "2026-10-27T10:53:12.345+00:00" (UTC) to epoch seconds.
                         int Y, M, D, h, m, s;
                         const char *at = a["media_position_updated_at"] | "";
@@ -4635,6 +4736,9 @@ script:
           lv_label_set_text(id(media_elapsed_label), a);
           lv_label_set_text(id(media_duration_label), b);
           lv_slider_set_value(id(media_seek_slider), dur > 0 ? (int) (pos / dur * 1000) : 0, LV_ANIM_OFF);
+          // Volume (0-1 from HA), unless the slider is being dragged.
+          if (!lv_obj_has_state(id(media_volume_slider), LV_STATE_PRESSED) && !std::isnan(id(media_volume)))
+            lv_slider_set_value(id(media_volume_slider), (int) roundf(id(media_volume) * 100), LV_ANIM_OFF);
 
   # Media card buttons: run a media_player action on the selected player,
   # then re-read its state.
@@ -4681,7 +4785,7 @@ script:
             - delay: 1500ms
             - script.execute: media_poll
 
-  # Home page clock card: time only (no seconds).
+  # Home page clock card: time (no seconds), day and date.
   - id: update_clock
     then:
       - if:
@@ -4692,6 +4796,12 @@ script:
             - lvgl.label.update:
                 id: clock_time_label
                 text: !lambda 'return id(my_time).now().strftime("%H:%M");'
+            - lvgl.label.update:
+                id: clock_day_label
+                text: !lambda 'return id(my_time).now().strftime("%A");'
+            - lvgl.label.update:
+                id: clock_date_label
+                text: !lambda 'return id(my_time).now().strftime("%d %B");'
 
   # Download the latest Frigate snapshot through HA's image proxy. The short
   # delay lets the new entity_picture token arrive with the new state.
@@ -4971,12 +5081,14 @@ script:
             total += v;
             days++;
           }
-          const int full = lv_obj_get_content_height(id(elec_bars));
+          // Heights in percent of the 140 px bar area (1 % = 1.4 px), not
+          // pixels: the Energy page is not laid out until it is first shown,
+          // so its measured height is 0 at boot. Empty days are a 3 % stub.
           for (int i = 0; i < 14; i++) {
             const float v = id(energy_history)[i];
             const bool ok = !std::isnan(v) && max_v > 0;
-            const int h = ok ? std::max(4, (int) (v / max_v * full)) : 4;
-            lv_obj_set_height(bars[i], h);
+            const int pct = ok ? std::max(3, (int) (v / max_v * 100)) : 3;
+            lv_obj_set_height(bars[i], lv_pct(pct));
             lv_obj_set_style_bg_opa(bars[i], ok ? LV_OPA_COVER : LV_OPA_30, LV_PART_MAIN);
           }
           char text[48];
@@ -5823,8 +5935,9 @@ sensor:
           int pos = (int) x;
           if (pos < 0) pos = 0;
           if (pos > 100) pos = 100;
-          const int full = lv_obj_get_content_height(id(garage_position_container));
-          lv_obj_set_height(id(garage_door_curtain), full * (100 - pos) / 100);
+          // Percent of the frame, not pixels: the Security page is not laid
+          // out until it is first shown, so its measured height is 0 at boot.
+          lv_obj_set_height(id(garage_door_curtain), lv_pct(100 - pos));
           // Status and icon from the position: 0-3 % closed, 97-100 % open.
           const char *status = pos <= 3 ? "Closed" : pos >= 97 ? "Open" : "Partly open";
           lv_label_set_text(id(garage_status_label), status);
