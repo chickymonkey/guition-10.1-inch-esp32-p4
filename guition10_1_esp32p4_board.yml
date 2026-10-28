@@ -1003,6 +1003,7 @@ image:
     buffer_size: 65536
     on_download_finished:
       - lvgl.image.update: {id: cam_front_person_snap, src: cam_front_person_img}
+      - lvgl.widget.show: cam_front_person_snap
   - platform: online_image
     id: cam_front_cat_img
     url: ${ha_base_url}/
@@ -1013,6 +1014,7 @@ image:
     buffer_size: 65536
     on_download_finished:
       - lvgl.image.update: {id: cam_front_cat_snap, src: cam_front_cat_img}
+      - lvgl.widget.show: cam_front_cat_snap
   - platform: online_image
     id: cam_drive_person_img
     url: ${ha_base_url}/
@@ -1023,6 +1025,7 @@ image:
     buffer_size: 65536
     on_download_finished:
       - lvgl.image.update: {id: cam_drive_person_snap, src: cam_drive_person_img}
+      - lvgl.widget.show: cam_drive_person_snap
   - platform: online_image
     id: cam_drive_cat_img
     url: ${ha_base_url}/
@@ -1033,6 +1036,7 @@ image:
     buffer_size: 65536
     on_download_finished:
       - lvgl.image.update: {id: cam_drive_cat_snap, src: cam_drive_cat_img}
+      - lvgl.widget.show: cam_drive_cat_snap
 
 
 lvgl:
@@ -2117,11 +2121,14 @@ lvgl:
       scrollable: false
       on_load:
         - script.execute: fetch_front_cam_snaps
+      # Free the two snapshot buffers (~160 KB each) when leaving, so the
+      # other camera page's stream decoder (811 KB) finds a big enough block.
+      on_unload:
+        - lvgl.widget.hide: [cam_front_person_snap, cam_front_cat_snap]
+        - online_image.release: cam_front_person_img
+        - online_image.release: cam_front_cat_img
       on_swipe_left:
-        - lvgl.page.show:
-            id: cam_driveway_page
-            animation: MOVE_LEFT
-            time: 250ms
+        - script.execute: {id: cam_switch, to_driveway: true}
       on_swipe_right:
         - lvgl.page.show:
             id: home_page
@@ -2164,10 +2171,7 @@ lvgl:
             x: 352
             y: 92
             on_click:
-              - lvgl.page.show:
-                  id: cam_driveway_page
-                  animation: MOVE_LEFT
-                  time: 250ms
+              - script.execute: {id: cam_switch, to_driveway: true}
             widgets:
               - label: {align: TOP_MID, y: 11, text: "Driveway", text_font: font_body}
         - obj:              # Front door camera: 640x480 stream
@@ -2277,11 +2281,12 @@ lvgl:
       scrollable: false
       on_load:
         - script.execute: fetch_driveway_cam_snaps
+      on_unload:
+        - lvgl.widget.hide: [cam_drive_person_snap, cam_drive_cat_snap]
+        - online_image.release: cam_drive_person_img
+        - online_image.release: cam_drive_cat_img
       on_swipe_right:
-        - lvgl.page.show:
-            id: cam_front_page
-            animation: MOVE_RIGHT
-            time: 250ms
+        - script.execute: {id: cam_switch, to_driveway: false}
       widgets:
         - button:
             id: back_home_btn
@@ -2305,10 +2310,7 @@ lvgl:
             x: 168
             y: 92
             on_click:
-              - lvgl.page.show:
-                  id: cam_front_page
-                  animation: MOVE_RIGHT
-                  time: 250ms
+              - script.execute: {id: cam_switch, to_driveway: false}
             widgets:
               - label: {align: TOP_MID, y: 11, text: "Front Door", text_font: font_body}
         - obj:
@@ -2422,13 +2424,41 @@ lvgl:
                         transform_rotation: 270
                         transform_pivot_x: 50
                         transform_pivot_y: 10
+
+    # ==================================================================
+    # CAMERA SWITCH: shown for 3 s between the two camera pages (cam_switch).
+    # The old stream's canvas is off screen here, so esp_rtsp_stream can
+    # drop it and free its decode buffer before the next stream starts.
+    # ==================================================================
+    - id: cam_switch_page
+      bg_color: 0x0B1018
+      scrollable: false
+      widgets:
+        - spinner:
+            align: CENTER
+            y: -20
+            width: 96
+            height: 96
+            spin_time: 1s
+            arc_length: 60deg
+            arc_color: 0x29364A
+            arc_width: 8
+            indicator:
+              arc_color: 0x4F7FE8
+              arc_width: 8
+        - label:
+            id: cam_switch_label
+            align: CENTER
+            y: 60
+            text: "Switching camera..."
+            text_font: font_body
+            text_color: 0xA7B2C4
     # ==================================================================
     # SECURITY: a 4 x 3 grid of cards below the header. For now only the
     # two door locks and the garage roller door, in the top row.
     # ==================================================================
     - id: security_page
       bg_color: 0x0B1018
-      bg_image_src: img_home_wallpaper
       scrollable: false
       on_load:
         - lvgl.widget.hide: security_confirm
@@ -2797,7 +2827,6 @@ lvgl:
     # ==================================================================
     - id: energy_page
       bg_color: 0x0B1018
-      bg_image_src: img_home_wallpaper
       scrollable: false
       on_swipe_right:
         - lvgl.page.show:
@@ -3006,8 +3035,15 @@ lvgl:
     # ==================================================================
     - id: entertainment_page
       bg_color: 0x0B1018
-      bg_image_src: img_home_wallpaper
       scrollable: false
+      # The 360x360 album art (~260 KB of PSRAM) is only kept while this page
+      # is shown. Clearing media_picture makes the next poll download it again.
+      on_load:
+        - script.execute: media_poll
+      on_unload:
+        - lvgl.widget.hide: media_art
+        - online_image.release: media_art_img
+        - lambda: id(media_picture) = "";
       on_swipe_right:
         - lvgl.page.show:
             id: home_page
@@ -3358,7 +3394,6 @@ lvgl:
     # ==================================================================
     - id: intercom_page
       bg_color: 0x0B1018
-      bg_image_src: img_home_wallpaper
       scrollable: false
       on_swipe_right:
         - lvgl.page.show:
@@ -5326,6 +5361,43 @@ script:
                 id: call_video_peer_label
                 text: !lambda 'return id(peer_name);'
             - lvgl.page.show: call_video_page
+
+  # Front Door <-> Driveway: the spinner page for 3 s first, so the old RTSP
+  # stream has released its 811 KB decode buffer (it drops ~3 s after its
+  # canvas leaves the screen) before the new one allocates its own.
+  # mode single: extra taps while switching are ignored.
+  - id: cam_switch
+    mode: single
+    parameters:
+      to_driveway: bool
+    then:
+      - lvgl.label.update:
+          id: cam_switch_label
+          text: !lambda 'return std::string(to_driveway ? "Opening Driveway..." : "Opening Front Door...");'
+      - lvgl.page.show:
+          id: cam_switch_page
+          animation: FADE_IN
+          time: 150ms
+      - delay: 3s
+      # Something else (an incoming call) took the screen: stay there.
+      - if:
+          condition:
+            lambda: return !id(cam_switch_page)->is_showing();
+          then:
+            - script.stop: cam_switch
+      - if:
+          condition:
+            lambda: return to_driveway;
+          then:
+            - lvgl.page.show:
+                id: cam_driveway_page
+                animation: MOVE_LEFT
+                time: 250ms
+          else:
+            - lvgl.page.show:
+                id: cam_front_page
+                animation: MOVE_RIGHT
+                time: 250ms
 
   - id: close_settings_page
     then:
