@@ -916,7 +916,7 @@ image:
     transparency: alpha_channel
     byte_order: little_endian
   - platform: file
-    file: ${images_base}home_wallpaper.png?v=6
+    file: ${images_base}home_wallpaper.png?v=7
     id: img_home_wallpaper
     resize: 1280x800
     type: RGB565
@@ -925,7 +925,7 @@ image:
   # transparent background, so the tile's grey (off) or amber (on) colour
   # shows around the lamp.
   - platform: file
-    file: ${images_base}floorlamp.png?v=5
+    file: ${images_base}floorlamp.png?v=6
     id: img_floor_lamp
     resize: 60x181
     type: RGB565
