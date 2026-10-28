@@ -921,13 +921,13 @@ image:
     resize: 1280x800
     type: RGB565
     byte_order: little_endian
-  # Lights card: TV floor lamp in its 202 px tile. The PNG is 60x181 with a
+  # Lights card: TV floor lamp in its 202 px tile. The PNG is 65x182 with a
   # transparent background, so the tile's grey (off) or amber (on) colour
   # shows around the lamp.
   - platform: file
-    file: ${images_base}floorlamp.png?v=6
+    file: ${images_base}floorlamp.png?v=7
     id: img_floor_lamp
-    resize: 60x181
+    resize: 65x182
     type: RGB565
     transparency: alpha_channel
     byte_order: little_endian
