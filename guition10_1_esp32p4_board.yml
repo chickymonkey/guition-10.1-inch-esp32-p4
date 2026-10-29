@@ -109,8 +109,7 @@ substitutions:
   temp_bedroom_entity: sensor.temp_bathroom_main_main_bathroom_temperature
   temp_outdoor_entity: sensor.bathroom_temp_and_humidity_temperature
   humidity_entity: sensor.temp_bathroom_main_main_bathroom_humidity
-  # Status bar: current soil moisture plus the 9-10 am average of the last two
-  # days (HA long-term statistics, so the sensor needs a state_class).
+
   soil_moisture_entity: sensor.current_soil_moisture
   # The sensor reports volumetric water content in m³/m³ (0.167 = 16.7 %);
   # values are multiplied by this to show a percentage. Use 1 for a % sensor.
@@ -268,9 +267,14 @@ esp_rtsp_stream:
 # Assistant's image entities, downloaded through HA's image proxy whenever the
 # entity updates (see the snapshot text sensors and the online_image entries
 # in image: below).
+#
+# Requests block the main loop (media_poll took 2.3 s, art decode ~0.7 s), so
+# a slow HA reply after Next track tripped the task watchdog (reboot). Keep
+# the timeout short and raise the watchdog only while a request is running.
 http_request:
   verify_ssl: false
-  timeout: 10s
+  timeout: 4s
+  watchdog_timeout: 15s
 
 # =======CONNECTIVITY==========================================================
 
@@ -903,6 +907,7 @@ font:
       - "\U000F0415"  # plus (heater target)
       - "\U000F0333"  # music-box-multiple (sidebar Media tab)
       - "\U000F0493"  # cog (sidebar Settings tab)
+      - "\U000F07AE"  # cctv (sidebar Cameras tab)
 
 # Card photos, from this repo's images/ folder (transparent PNG backgrounds).
 # resize keeps the aspect ratio and fits inside the given box.
@@ -1341,7 +1346,7 @@ lvgl:
                         animation: MOVE_LEFT
                         time: 250ms
                   widgets:
-                    - label: {align: CENTER, text: "\U000F07DE", text_font: font_mdi_36, text_color: 0x008080}   # Cameras: teal
+                    - label: {align: CENTER, text: "\U000F07AE", text_font: font_mdi_36, text_color: 0x008080}   # Cameras (mdi:cctv): teal
               - button:
                   id: nav_security_btn
                   styles: scene_btn
@@ -1484,8 +1489,85 @@ lvgl:
                   bg_grad_color: 0x0F1628
                   bg_grad_dir: VER
                   bg_opa: 70%
-                  border_color: 0x4A64B8
+                  # Border drawn by the frame overlays below (LVGL borders
+                  # can't take a gradient).
+                  border_width: 0
                   widgets:
+                    # ---- frame: left red, right blue, top / bottom red -> blue ----
+                    # LVGL leaves the corner arcs out of a one-sided border
+                    # (border_side LEFT / RIGHT), so each side is a full
+                    # rounded border cropped by a 28 px wide container: red
+                    # on the left, blue on the right, corners included. The
+                    # 2 px strips cover the rest of the top and bottom (card
+                    # about 677x384, radius 14).
+                    # Gradient stops (0-255 of the 649 px strip) put the blend
+                    # at 20-60 % of the card width on top, 40-80 % at the bottom.
+                    - obj:
+                        align: TOP_LEFT
+                        width: 28
+                        height: 100%
+                        radius: 0
+                        bg_opa: TRANSP
+                        border_width: 0
+                        pad_all: 0
+                        clickable: false
+                        scrollable: false
+                        widgets:
+                          - obj:
+                              align: TOP_LEFT
+                              width: 677
+                              height: 100%
+                              radius: 14
+                              bg_opa: TRANSP
+                              border_color: 0xE03E1D
+                              border_width: 2
+                              clickable: false
+                              scrollable: false
+                    - obj:
+                        align: TOP_RIGHT
+                        width: 28
+                        height: 100%
+                        radius: 0
+                        bg_opa: TRANSP
+                        border_width: 0
+                        pad_all: 0
+                        clickable: false
+                        scrollable: false
+                        widgets:
+                          - obj:
+                              align: TOP_RIGHT
+                              width: 677
+                              height: 100%
+                              radius: 14
+                              bg_opa: TRANSP
+                              border_color: 0x4A64B8
+                              border_width: 2
+                              clickable: false
+                              scrollable: false
+                    - obj:
+                        align: TOP_MID
+                        width: 649
+                        height: 2
+                        radius: 0
+                        border_width: 0
+                        bg_color: 0xE03E1D
+                        bg_grad_color: 0x4A64B8
+                        bg_grad_dir: HOR
+                        bg_main_stop: 48
+                        bg_grad_stop: 154
+                        clickable: false
+                    - obj:
+                        align: BOTTOM_MID
+                        width: 649
+                        height: 2
+                        radius: 0
+                        border_width: 0
+                        bg_color: 0xE03E1D
+                        bg_grad_color: 0x4A64B8
+                        bg_grad_dir: HOR
+                        bg_main_stop: 101
+                        bg_grad_stop: 207
+                        clickable: false
                     # ---- header ----
                     - obj:          # icon tile
                         x: 24
@@ -1502,7 +1584,7 @@ lvgl:
                     - label:
                         x: 104
                         y: 20
-                        text: "Gas Heater"
+                        text: "Heating and Cooling"
                         text_font: font_title
                         text_color: 0xFFFFFF
                     - label:
@@ -1949,7 +2031,7 @@ lvgl:
                           - label:
                               id: light_living_left_icon
                               align: TOP_MID
-                              y: 25
+                              y: 20
                               text: "\U000F0769"
                               text_font: font_mdi_36
                               text_color: 0x8995A7
@@ -1983,7 +2065,7 @@ lvgl:
                           - label:
                               id: light_living_right_icon
                               align: TOP_MID
-                              y: 25
+                              y: 20
                               text: "\U000F0769"
                               text_font: font_mdi_36
                               text_color: 0x8995A7
@@ -2501,16 +2583,17 @@ lvgl:
             layout:
               type: grid
               grid_rows: [FR(1), FR(1), FR(1)]
-              grid_columns: [FR(1), FR(1), FR(1), FR(1)]
+              # Outer half-width columns centre the three 320 px cards.
+              grid_columns: [FR(1), FR(2), FR(2), FR(2), FR(1)]
               pad_row: 0
               pad_column: 0
             widgets:
-              # ---- Front Door lock (col 0, row 0) ----
+              # ---- Front Door lock (col 1, row 1) ----
               - obj:
                   styles: cell_style
                   scrollable: false
-                  grid_cell_column_pos: 0
-                  grid_cell_row_pos: 0
+                  grid_cell_column_pos: 1
+                  grid_cell_row_pos: 1
                   grid_cell_x_align: STRETCH
                   grid_cell_y_align: STRETCH
                   widgets:
@@ -2570,12 +2653,12 @@ lvgl:
                                     text: "\U000F033E"
                                     text_font: font_mdi_36
                                     text_color: 0xFFFFFF
-              # ---- Garage Door lock (col 1, row 0) ----
+              # ---- Garage Door lock (col 2, row 1) ----
               - obj:
                   styles: cell_style
                   scrollable: false
-                  grid_cell_column_pos: 1
-                  grid_cell_row_pos: 0
+                  grid_cell_column_pos: 2
+                  grid_cell_row_pos: 1
                   grid_cell_x_align: STRETCH
                   grid_cell_y_align: STRETCH
                   widgets:
@@ -2642,8 +2725,8 @@ lvgl:
               - obj:
                   styles: cell_style
                   scrollable: false
-                  grid_cell_column_pos: 2
-                  grid_cell_row_pos: 0
+                  grid_cell_column_pos: 3
+                  grid_cell_row_pos: 1
                   grid_cell_column_span: 1
                   grid_cell_row_span: 1
                   grid_cell_x_align: STRETCH
@@ -2877,8 +2960,8 @@ lvgl:
               - obj:
                   styles: cell_style
                   scrollable: false
-                  grid_cell_column_pos: 0
-                  grid_cell_row_pos: 0
+                  grid_cell_column_pos: 1
+                  grid_cell_row_pos: 1
                   grid_cell_column_span: 1
                   grid_cell_row_span: 1
                   grid_cell_x_align: STRETCH
@@ -3298,20 +3381,20 @@ lvgl:
                               shadow_opa: 50%
                               on_click:
                                 - if:
-                                    # Nothing loaded (idle/off, or no track): start
-                                    # the default playlist instead of play/pause.
+                                    # Empty queue (no track loaded, whatever the state):
+                                    # start the default playlist instead of play/pause.
                                     condition:
-                                      lambda: |-
-                                        const std::string &st = id(media_state);
-                                        const bool loaded = st == "playing" || st == "paused" || st == "buffering";
-                                        return !loaded || id(media_title).empty();
+                                      lambda: return id(media_content_id).empty() && id(media_title).empty();
                                     then:
                                       - script.execute: media_play_default
                                     else:
-                                      # Show the new state at once; the next poll confirms it.
+                                      # Track loaded: pause if playing, otherwise resume it
+                                      # (also from idle). Show the new state at once; the
+                                      # next poll confirms it.
                                       - lambda: |-
                                           const time_t now = id(my_time).now().timestamp;
-                                          if (id(media_state) == "playing") {
+                                          const bool playing = id(media_state) == "playing";
+                                          if (playing) {
                                             if (id(media_pos_at) > 0) id(media_pos) += now - id(media_pos_at);
                                             id(media_state) = "paused";
                                           } else {
@@ -3321,7 +3404,7 @@ lvgl:
                                       - script.execute: media_draw
                                       - script.execute:
                                           id: media_command
-                                          service: media_player.media_play_pause
+                                          service: !lambda 'return id(media_state) == "playing" ? "media_player.media_play" : "media_player.media_pause";'
                               widgets:
                                 - label: {id: media_play_icon, align: CENTER, text: "\U000F040A", text_font: font_mdi_36, text_color: 0xFFFFFF}
                           - button:
@@ -3444,8 +3527,8 @@ lvgl:
               - obj:
                   styles: cell_style
                   scrollable: false
-                  grid_cell_column_pos: 0
-                  grid_cell_row_pos: 0
+                  grid_cell_column_pos: 1
+                  grid_cell_row_pos: 1
                   grid_cell_column_span: 1
                   grid_cell_row_span: 1
                   grid_cell_x_align: STRETCH
@@ -4426,7 +4509,7 @@ lvgl:
         # top of the scrolling settings list.
         - button:
             id: settings_back_btn
-            styles: scene_btn          # same as the Cameras page Home button
+            styles: scene_btn  
             x: 16
             y: 14
             width: 120
@@ -4676,6 +4759,11 @@ globals:
     type: std::string
     restore_value: false
     initial_value: '""'
+  # Loaded track (e.g. library://track/285); empty when the queue is empty.
+  - id: media_content_id
+    type: std::string
+    restore_value: false
+    initial_value: '""'
   - id: media_name
     type: std::string
     restore_value: false
@@ -4738,7 +4826,7 @@ script:
                         JsonDocument filter;
                         filter["state"] = true;
                         JsonObject fa = filter["attributes"].to<JsonObject>();
-                        for (const char *k : {"media_title", "media_artist", "media_album_name", "media_duration",
+                        for (const char *k : {"media_content_id", "media_title", "media_artist", "media_album_name", "media_duration",
                                               "media_position", "media_position_updated_at", "entity_picture",
                                               "friendly_name", "volume_level"})
                           fa[k] = true;
@@ -4750,6 +4838,7 @@ script:
                         }
                         JsonObjectConst a = doc["attributes"];
                         id(media_state) = doc["state"] | "";
+                        id(media_content_id) = a["media_content_id"] | "";
                         id(media_title) = a["media_title"] | "";
                         id(media_artist) = a["media_artist"] | "";
                         id(media_name) = a["friendly_name"] | "";
@@ -6164,6 +6253,10 @@ sensor:
       - lvgl.arc.update:
           id: heater_current_arc
           value: !lambda 'return (int) roundf(std::min(35.0f, std::max(10.0f, x)));'
+      # Ring colour by temperature: blue below 15°, orange 15-24°, red from 24°.
+      - lambda: |-
+          const uint32_t color = x < 15 ? 0x6A7BFF : x < 24 ? 0xE46F33 : 0xE03E1D;
+          lv_obj_set_style_arc_color(id(heater_current_arc), lv_color_hex(color), LV_PART_INDICATOR);
 
   # Gas heater target (climate "temperature" attribute).
   - platform: homeassistant
@@ -6260,7 +6353,7 @@ text_sensor:
     on_value:
       - lambda: |-
           id(media_state) = id(media_title) = id(media_artist) = id(media_name) = "";
-          id(media_picture) = "";
+          id(media_picture) = id(media_content_id) = "";
           id(media_duration) = id(media_pos) = 0;
           id(media_pos_at) = 0;
           lv_obj_add_flag(id(media_art), LV_OBJ_FLAG_HIDDEN);
