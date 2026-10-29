@@ -273,7 +273,7 @@ esp_rtsp_stream:
 # the timeout short and raise the watchdog only while a request is running.
 http_request:
   verify_ssl: false
-  timeout: 4s
+  timeout: 5s
   watchdog_timeout: 15s
 
 # =======CONNECTIVITY==========================================================
@@ -3433,28 +3433,27 @@ lvgl:
                               text: "\U000F057E"      # volume-high
                               text_font: font_mdi_24
                               text_color: 0x9DB4FF
-                          - slider:
+                          - slider: # Volume Slider
                               id: media_volume_slider
-                              x: 68
-                              y: 673
+                              x: 63
+                              y: 660
                               width: 524
-                              height: 6
+                              height: 36
                               min_value: 0
                               max_value: 100
+                              adv_hittest: true
+                              gesture_bubble: true
                               value: 0
-                              bg_color: 0x2A3550
+                              bg_color: 0x99ade0
                               bg_opa: COVER
-                              radius: 3
+                              radius: 13
                               indicator:
-                                bg_color: 0x3B82F6
-                                bg_grad_color: 0xC4B5FD
+                                bg_color: 0x6f7bdc
+                                bg_grad_color: 0xef125f
                                 bg_grad_dir: HOR
-                                radius: 3
-                              knob:
-                                bg_color: 0xFFFFFF
-                                pad_all: 4
-                                radius: 100
-                              on_release:
+                                radius: 13
+                              on_single_click:
+                                - delay: 100ms
                                 - if:
                                     condition:
                                       lambda: return id(media_entity).state.rfind("media_player.", 0) == 0;
@@ -3468,7 +3467,21 @@ lvgl:
                                               char buf[8];
                                               snprintf(buf, sizeof(buf), "%.2f", id(media_volume));
                                               return std::string(buf);
-
+                              on_release:
+                                - delay: 100ms
+                                - if:
+                                    condition:
+                                      lambda: return id(media_entity).state.rfind("media_player.", 0) == 0;
+                                    then:
+                                      - lambda: id(media_volume) = x / 100.0f;
+                                      - homeassistant.action:
+                                          action: media_player.volume_set
+                                          data:
+                                            entity_id: !lambda 'return id(media_entity).state;'
+                                            volume_level: !lambda |-
+                                              char buf[8];
+                                              snprintf(buf, sizeof(buf), "%.2f", id(media_volume));
+                                              return std::string(buf);
 
     # ==================================================================
     # INTERCOM: the VoIP intercom card; shown automatically when a call comes in
