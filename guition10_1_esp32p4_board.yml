@@ -124,7 +124,7 @@ substitutions:
   light_living_right_entity: light.living_room_right
   # Frigate "last person" snapshots for the home page camera tiles, fetched
   # from HA's image proxy. ha_base_url must be reachable from this device.
-  ha_base_url: "http://homeassistant.local:8123"
+  ha_base_url: "http://192.168.3.120:8123"
   snapshot_front_entity: image.porchdahuafrigate_person
   snapshot_driveway_entity: image.garagecamera_person
   # Camera pages: Frigate "last cat" snapshots, shown under the person
@@ -216,6 +216,7 @@ esp32:
   framework:
     sdkconfig_options:
       CONFIG_ESP_MM_CACHE_MSYNC_C2M_CHUNKED_OPS: "y"
+
     advanced:
       execute_from_psram: true
       compiler_optimization: "PERF"
@@ -267,10 +268,7 @@ esp_rtsp_stream:
 # Assistant's image entities, downloaded through HA's image proxy whenever the
 # entity updates (see the snapshot text sensors and the online_image entries
 # in image: below).
-#
-# Requests block the main loop (media_poll took 2.3 s, art decode ~0.7 s), so
-# a slow HA reply after Next track tripped the task watchdog (reboot). Keep
-# the timeout short and raise the watchdog only while a request is running.
+
 http_request:
   verify_ssl: false
   timeout: 5s
@@ -315,6 +313,9 @@ api:
     - script.execute: update_call_tile
     - script.execute: update_status_bar
     - delay: 5s
+    # HA has sent the entity states by now: redraw the heater card (its
+    # binary sensors may not fire on_state for the first state).
+    - script.execute: heater_update_buttons
     - script.execute: fetch_energy_history
     - script.execute: fetch_soil_history
 
@@ -927,7 +928,7 @@ image:
     type: RGB565
     byte_order: little_endian
   # Lights card: TV floor lamp in its 202 px tile. The PNG is 65x182 with a
-  # transparent background, so the tile's grey (off) or amber (on) colour
+  # transparent background, so the tile's grey (off) or warm rose (on) colour
   # shows around the lamp.
   - platform: file
     file: ${images_base}floorlamp.png?v=7
@@ -994,9 +995,11 @@ image:
     update_interval: never
     buffer_size: 65536
     on_download_finished:
+      - logger.log: {level: INFO, tag: media, format: "Art shown"}
       - lvgl.image.update: {id: media_art, src: media_art_img}
       - lvgl.widget.show: media_art
     on_error:
+      - logger.log: {level: WARN, tag: media, format: "Art download failed"}
       - lvgl.widget.hide: media_art
   - platform: online_image
     id: cam_front_person_img
@@ -1059,6 +1062,26 @@ lvgl:
     - script.execute: update_call_tile
     - script.execute: settings_sync_widgets
 
+  # Warm spotlight centred on the lamp/icon, fading towards the tile edges.
+  gradients:
+    - id: light_tile_glow
+      direction: radial
+      radial:
+        center_x: 50%
+        center_y: 38
+        to_x: 50%
+        to_y: 148
+        extend: PAD
+      stops:
+        - color: 0xCD9F8E
+          position: 0
+        - color: 0x9B7163
+          position: 85
+        - color: 0x5E4540
+          position: 170
+        - color: 0x342C30
+          position: 255
+
   style_definitions:
     # transparent grid cell: its 6 px padding makes the 12 px gap between cards
     - id: cell_style
@@ -1119,7 +1142,7 @@ lvgl:
       border_width: 0
       shadow_width: 0
       text_color: 0x8995A7
-    # Lights card tile, off state (dark grey). The on state (amber + glow) is
+    # Lights card tile, off state (dark grey). The on state (warm radial glow) is
     # each tile's "checked:" block.
     - id: light_tile
       width: 75
@@ -1677,8 +1700,8 @@ lvgl:
                         x: 300
                         y: 120
                         width: 353
-                        height: 96
-                        radius: 48
+                        height: 77
+                        radius: 38
                         bg_color: 0x151D2B
                         border_color: 0x2F3B52
                         border_width: 1
@@ -1688,9 +1711,9 @@ lvgl:
                           - button:
                               styles: round_btn
                               align: LEFT_MID
-                              x: 12
-                              width: 72
-                              height: 72
+                              x: 10
+                              width: 58
+                              height: 58
                               bg_color: 0x1A2333
                               border_color: 0x2F3B52
                               border_width: 1
@@ -1701,23 +1724,34 @@ lvgl:
                           - label:
                               id: heater_target_title
                               align: CENTER
-                              y: -26
+                              y: -18
                               text: "Target"
                               text_font: font_body
                               text_color: 0x9DB4FF
+                          # Target temperature (heat) in the big font; the fan
+                          # speed (fan mode) in the title's font. heater_draw_target
+                          # shows one of the two.
                           - label:
                               id: heater_target_label
                               align: CENTER
-                              y: 14
+                              y: 12
                               text: "--°"
                               text_font: font_temp_big
                               text_color: 0xFFFFFF
+                          - label:
+                              id: heater_speed_label
+                              align: CENTER
+                              y: 12
+                              text: "--"
+                              text_font: font_body
+                              text_color: 0xFFFFFF
+                              hidden: true
                           - button:
                               styles: round_btn
                               align: RIGHT_MID
-                              x: -12
-                              width: 72
-                              height: 72
+                              x: -10
+                              width: 58
+                              height: 58
                               bg_color: 0x1A2333
                               border_color: 0x2F3B52
                               border_width: 1
@@ -1760,6 +1794,11 @@ lvgl:
                                 border_width: 1
                                 text_color: 0xFFFFFF
                               on_click:
+                                # Leave fan mode first, else the unit stays in it.
+                                - homeassistant.action:
+                                    action: switch.turn_off
+                                    data:
+                                      entity_id: ${heater_fan_switch}
                                 - homeassistant.action:
                                     action: switch.turn_on
                                     data:
@@ -1984,12 +2023,13 @@ lvgl:
                         y: 64
                         clip_corner: true       # lamp image keeps the tile's rounded corners
                         checked:
-                          bg_color: 0xD9901A
-                          border_color: 0xFBBF24
-                          shadow_color: 0xF59E0B
-                          shadow_width: 24
-                          shadow_spread: 3
-                          shadow_opa: 60%
+                          bg_color: 0xCD9F8E
+                          bg_grad: light_tile_glow
+                          border_color: 0x9B7163
+                          shadow_color: 0xCD9F8E
+                          shadow_width: 16
+                          shadow_spread: 0
+                          shadow_opa: 30%
                         on_click:
                           - homeassistant.action:
                               action: light.toggle
@@ -2016,12 +2056,13 @@ lvgl:
                         x: 103
                         y: 64
                         checked:
-                          bg_color: 0xD9901A
-                          border_color: 0xFBBF24
-                          shadow_color: 0xF59E0B
-                          shadow_width: 24
-                          shadow_spread: 3
-                          shadow_opa: 60%
+                          bg_color: 0xCD9F8E
+                          bg_grad: light_tile_glow
+                          border_color: 0x9B7163
+                          shadow_color: 0xCD9F8E
+                          shadow_width: 16
+                          shadow_spread: 0
+                          shadow_opa: 30%
                         on_click:
                           - homeassistant.action:
                               action: light.toggle
@@ -2050,12 +2091,13 @@ lvgl:
                         x: 193
                         y: 64
                         checked:
-                          bg_color: 0xD9901A
-                          border_color: 0xFBBF24
-                          shadow_color: 0xF59E0B
-                          shadow_width: 24
-                          shadow_spread: 3
-                          shadow_opa: 60%
+                          bg_color: 0xCD9F8E
+                          bg_grad: light_tile_glow
+                          border_color: 0x9B7163
+                          shadow_color: 0xCD9F8E
+                          shadow_width: 16
+                          shadow_spread: 0
+                          shadow_opa: 30%
                         on_click:
                           - homeassistant.action:
                               action: light.toggle
@@ -4803,6 +4845,12 @@ globals:
     restore_value: false
     initial_value: "NAN"
 
+  # DEBUG: millis() of the last main-loop heartbeat (loop_monitor).
+  - id: loop_beat
+    type: uint32_t
+    restore_value: false
+    initial_value: "0"
+
   # Security page action waiting for Confirm: 1 unlock front door, 2 unlock
   # garage door, 3 roller door button (0 = none).
   - id: security_confirm_action
@@ -4822,6 +4870,10 @@ script:
               - api.connected:
               - lambda: return id(media_entity).state.rfind("media_player.", 0) == 0;
           then:
+            - logger.log:
+                level: INFO
+                tag: media
+                format: "State request"
             - http_request.get:
                 url: !lambda 'return std::string("${ha_base_url}/api/states/") + id(media_entity).state;'
                 request_headers:
@@ -4871,15 +4923,17 @@ script:
                         } else {
                           id(media_pos_at) = 0;
                         }
-                        // New art (the proxy URL changes per track): download it.
+                        ESP_LOGI("media", "State: %s, '%s'", id(media_state).c_str(), id(media_title).c_str());
+                        // New art (the proxy URL changes per track): download it
+                        // later, in media_fetch_art. Starting it here opened a
+                        // second connection to HA while this one was still open.
                         std::string pic = a["entity_picture"] | "";
                         if (pic != id(media_picture)) {
                           id(media_picture) = pic;
                           if (pic.empty()) {
                             lv_obj_add_flag(id(media_art), LV_OBJ_FLAG_HIDDEN);
                           } else {
-                            id(media_art_img).set_url(pic.rfind("http", 0) == 0 ? pic : "${ha_base_url}" + pic);
-                            id(media_art_img).update();
+                            id(media_fetch_art).execute();
                           }
                         }
                     - script.execute: media_draw
@@ -4950,12 +5004,40 @@ script:
           condition:
             lambda: return id(media_entity).state.rfind("media_player.", 0) == 0;
           then:
+            - logger.log:
+                level: INFO
+                tag: media
+                format: "Command %s"
+                args: ['service.c_str()']
             - homeassistant.action:
                 action: !lambda 'return service;'
                 data:
                   entity_id: !lambda 'return id(media_entity).state;'
+            - logger.log: {level: INFO, tag: media, format: "Command sent"}
             - delay: 800ms
             - script.execute: media_poll
+
+  # Album art download, 1.5 s after the poll that saw new art: the state
+  # request's connection is closed by then, and HA has had time to fetch the
+  # new track's art. A newer track restarts the wait.
+  - id: media_fetch_art
+    mode: restart
+    then:
+      - delay: 1500ms
+      - if:
+          condition:
+            lambda: return !id(media_picture).empty() && id(entertainment_page)->is_showing();
+          then:
+            - logger.log:
+                level: INFO
+                tag: media
+                format: "Art download: %s"
+                args: ['id(media_picture).c_str()']
+            - online_image.set_url:
+                id: media_art_img
+                url: !lambda |-
+                  const std::string &pic = id(media_picture);
+                  return pic.rfind("http", 0) == 0 ? pic : "${ha_base_url}" + pic;
 
   # Media card play button with an empty queue: shuffle on, then play the
   # ${media_default_playlist} playlist through Music Assistant.
@@ -5708,8 +5790,8 @@ script:
       - lvgl.widget.update: {id: scene_cat_away_btn, state: {checked: !lambda 'return which == 3;'}}
 
   # Lights card tiles from the HA light state (same method as the 4" panel):
-  # on = amber tile with an amber glow and a white icon, off/unknown = dark
-  # grey tile and grey icon. Sets the colours directly, so it can be re-run
+  # on = warm radial glow and a white icon, off/unknown = dark
+  # grey tile and grey icon. Sets the checked state, so it can be re-run
   # at any time (light change, 8 s after boot, every 3 s).
   - id: light_tiles_check
     then:
@@ -5719,39 +5801,29 @@ script:
           then:
             - lvgl.widget.update:
                 id: light_tv_lamp_btn
-                bg_color: 0xD9901A
-                border_color: 0xFBBF24
-                shadow_color: 0xF59E0B
-                shadow_width: 24
-                shadow_spread: 3
-                shadow_opa: 60%
+                state:
+                  checked: true
           else:
             - lvgl.widget.update:
                 id: light_tv_lamp_btn
-                bg_color: 0x2A2F38
-                border_color: 0x3A4150
-                shadow_width: 0
+                state:
+                  checked: false
       - if:
           condition:
             binary_sensor.is_on: light_living_left_on
           then:
             - lvgl.widget.update:
                 id: light_living_left_btn
-                bg_color: 0xD9901A
-                border_color: 0xFBBF24
-                shadow_color: 0xF59E0B
-                shadow_width: 24
-                shadow_spread: 3
-                shadow_opa: 60%
+                state:
+                  checked: true
             - lvgl.label.update:
                 id: light_living_left_icon
                 text_color: 0xFFFFFF
           else:
             - lvgl.widget.update:
                 id: light_living_left_btn
-                bg_color: 0x2A2F38
-                border_color: 0x3A4150
-                shadow_width: 0
+                state:
+                  checked: false
             - lvgl.label.update:
                 id: light_living_left_icon
                 text_color: 0x8995A7
@@ -5761,21 +5833,16 @@ script:
           then:
             - lvgl.widget.update:
                 id: light_living_right_btn
-                bg_color: 0xD9901A
-                border_color: 0xFBBF24
-                shadow_color: 0xF59E0B
-                shadow_width: 24
-                shadow_spread: 3
-                shadow_opa: 60%
+                state:
+                  checked: true
             - lvgl.label.update:
                 id: light_living_right_icon
                 text_color: 0xFFFFFF
           else:
             - lvgl.widget.update:
                 id: light_living_right_btn
-                bg_color: 0x2A2F38
-                border_color: 0x3A4150
-                shadow_width: 0
+                state:
+                  checked: false
             - lvgl.label.update:
                 id: light_living_right_icon
                 text_color: 0x8995A7
@@ -5793,14 +5860,16 @@ script:
   # (in fan-only mode the Rinnai "target" is the fan speed, 1-16).
   - id: heater_update_buttons
     then:
+      # The Rinnai on/off switch stays on in fan mode, so the circulation fan
+      # switch decides the mode: fan on = Fan, otherwise power on = Heat.
       - lvgl.widget.update:
           id: heater_btn_heat
           state:
-            checked: !lambda 'return id(heater_power_on).state;'
+            checked: !lambda 'return id(heater_power_on).state && !id(heater_fan_on).state;'
       - lvgl.widget.update:
           id: heater_btn_fan
           state:
-            checked: !lambda 'return id(heater_fan_on).state && !id(heater_power_on).state;'
+            checked: !lambda 'return id(heater_fan_on).state;'
       - lambda: |-
           const bool on = id(heater_power_on).state || id(heater_fan_on).state;
           lv_obj_t *btn = id(heater_power_btn);
@@ -5813,12 +5882,16 @@ script:
   - id: heater_draw_target
     then:
       - lambda: |-
-          const bool fan_only = id(heater_fan_on).state && !id(heater_power_on).state;
+          const bool fan_only = id(heater_fan_on).state;   // fan mode (see heater_update_buttons)
           const float t = id(heater_target);
           char buf[12] = "--";
           if (!std::isnan(t) && t > 0) snprintf(buf, sizeof(buf), fan_only ? "%.0f" : "%.0f°", t);
           else if (!fan_only) snprintf(buf, sizeof(buf), "--°");
-          lv_label_set_text(id(heater_target_label), buf);
+          lv_obj_t *show = fan_only ? id(heater_speed_label) : id(heater_target_label);
+          lv_obj_t *hide = fan_only ? id(heater_target_label) : id(heater_speed_label);
+          lv_label_set_text(show, buf);
+          lv_obj_clear_flag(show, LV_OBJ_FLAG_HIDDEN);
+          lv_obj_add_flag(hide, LV_OBJ_FLAG_HIDDEN);
           lv_label_set_text(id(heater_target_title), fan_only ? "Fan speed" : "Target");
 
   # Target - / +: shows the new value at once and sends it 700 ms after the
@@ -5829,7 +5902,7 @@ script:
       delta: int
     then:
       - lambda: |-
-          const bool fan_only = id(heater_fan_on).state && !id(heater_power_on).state;
+          const bool fan_only = id(heater_fan_on).state;   // fan mode (see heater_update_buttons)
           const float lo = fan_only ? 1 : 8, hi = fan_only ? 16 : 30;
           float t = id(heater_target);
           if (std::isnan(t) || t <= 0) t = fan_only ? 8 : 20;
@@ -6506,13 +6579,15 @@ interval:
     then:
       - script.execute: light_tiles_check
 
-  # Media card: re-read the player state while the Entertainment page is shown, and
-  # move the progress bar every second while playing.
-  - interval: 3s
-    then:
+       # Media card: re-read the player state while the Entertainment page is shown, and
+       # move the progress bar every second while playing.
       - if:
           condition:
-            lambda: return id(entertainment_page)->is_showing();
+            # Not while a button command or an art download is pending: one
+            # request to HA at a time.
+            lambda: |-
+              return id(entertainment_page)->is_showing() &&
+                     !id(media_command).is_running() && !id(media_fetch_art).is_running();
           then:
             - script.execute: media_poll
   - interval: 1s
@@ -6523,9 +6598,8 @@ interval:
           then:
             - script.execute: media_tick
 
-  # Settings page uptime ticks every second, only while that page is shown.
-  - interval: 1s
-    then:
+       # Settings page uptime ticks every second, only while that page is shown.
+  
       - if:
           condition:
             lambda: return id(settings_p4_page)->is_showing();
