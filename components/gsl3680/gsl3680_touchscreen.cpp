@@ -47,10 +47,20 @@ void GSL3680Touchscreen::setup() {
   if (this->y_raw_max_ == this->y_raw_min_)
     this->y_raw_max_ = this->panel_height_;
 
-  if (!this->init_chip_() || !this->check_firmware_()) {
-    ESP_LOGE(TAG, "Initialisation failed");
-    this->mark_failed();
-    return;
+  // The controller does not always start on the first load (seen after an OTA
+  // reboot: firmware status 00 00 00 00), so reset and reload a few times.
+  static constexpr int ATTEMPTS = 3;
+  for (int attempt = 1;; attempt++) {
+    if (this->init_chip_() && this->check_firmware_())
+      break;
+    if (attempt == ATTEMPTS) {
+      ESP_LOGE(TAG, "Initialisation failed after %d attempts", ATTEMPTS);
+      this->mark_failed();
+      return;
+    }
+    ESP_LOGW(TAG, "Initialisation attempt %d failed, retrying", attempt);
+    App.feed_wdt();
+    delay(50);
   }
   ESP_LOGCONFIG(TAG, "Firmware loaded (%u records)", (unsigned) gsl3680_firmware_count);
 }
@@ -130,17 +140,17 @@ bool GSL3680Touchscreen::init_chip_() {
 }
 
 bool GSL3680Touchscreen::check_firmware_() {
-  uint8_t status[4];
-  delay(30);
-  if (this->read_register(0xb0, status, sizeof(status)) != i2c::ERROR_OK) {
-    ESP_LOGE(TAG, "Firmware status read failed");
-    return false;
+  // The status reads 5A 5A 5A 5A once the firmware runs; give it up to ~300 ms.
+  uint8_t status[4] = {0, 0, 0, 0};
+  for (int i = 0; i < 10; i++) {
+    delay(30);
+    if (this->read_register(0xb0, status, sizeof(status)) != i2c::ERROR_OK)
+      continue;
+    if (status[0] == 0x5a && status[1] == 0x5a && status[2] == 0x5a && status[3] == 0x5a)
+      return true;
   }
-  if (status[0] != 0x5a || status[1] != 0x5a || status[2] != 0x5a || status[3] != 0x5a) {
-    ESP_LOGE(TAG, "Invalid firmware status %02X %02X %02X %02X", status[0], status[1], status[2], status[3]);
-    return false;
-  }
-  return true;
+  ESP_LOGW(TAG, "Invalid firmware status %02X %02X %02X %02X", status[0], status[1], status[2], status[3]);
+  return false;
 }
 
 uint16_t GSL3680Touchscreen::scale_(int32_t raw, uint16_t gain, uint16_t raw_range, uint16_t extent) const {

@@ -17,7 +17,7 @@ drive the UI directly. Board-specific changes are marked `[GUITION]` in the YAML
 
 | Part | Details |
 |---|---|
-| SoC | ESP32-P4, production silicon (chip revision v3.x), 16 MB flash, 32 MB hex PSRAM |
+| SoC | Chip is ESP32-P4 (revision v3.2) Features: High-Performance MCU， Crystal is 40MHz, 16 MB flash, 32 MB hex PSRAM |
 | Wi-Fi | ESP32-C6 co-processor over SDIO |
 | Display | 10.1" 800×1280 MIPI-DSI (JD9365), used in landscape |
 | Touch | GSL3680 at I2C 0x40 |
