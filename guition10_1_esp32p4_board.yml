@@ -136,6 +136,10 @@ substitutions:
   # read from HA's REST API, which needs a long-lived access token (HA profile
   # > Security) in secrets.yaml as ha_token.
   media_player_select_entity: input_text.living_room_player
+  # Speakers offered by the card's speaker button: an input_select whose
+  # options are media_player entity ids. Picking one sets this dropdown and
+  # writes the id into ${media_player_select_entity}.
+  media_speaker_select_entity: input_select.dropdown_speakers
   # Music Assistant playlist started by the play button when the player has
   # nothing loaded (shuffled, replacing the empty queue).
   media_default_playlist: "Every Songs"
@@ -271,8 +275,7 @@ esp_rtsp_stream:
 
 http_request:
   verify_ssl: false
-  timeout: 5s
-  watchdog_timeout: 15s
+  timeout: 10s
 
 # =======CONNECTIVITY==========================================================
 
@@ -315,7 +318,7 @@ api:
     - delay: 5s
     # HA has sent the entity states by now: redraw the heater card (its
     # binary sensors may not fire on_state for the first state).
-    - script.execute: heater_update_buttons
+    - script.execute: heater_state_changed
     - script.execute: fetch_energy_history
     - script.execute: fetch_soil_history
 
@@ -866,6 +869,7 @@ font:
       - "\U000F0415"  # plus (heater target)
       - "\U000F0717"  # snowflake (heater Cool)
       - "\U000F0210"  # fan (heater Fan)
+      - "\U000F0156"  # close (heater timer window, speaker picker)
 
   - file: "https://raw.githubusercontent.com/Templarian/MaterialDesign-Webfont/master/fonts/materialdesignicons-webfont.ttf"
     id: font_mdi_36
@@ -906,9 +910,11 @@ font:
       - "\U000F0210"  # fan (heater Fan)
       - "\U000F0374"  # minus (heater target)
       - "\U000F0415"  # plus (heater target)
+      - "\U000F1A3A"  # fan-clock (heater Delay on / Delay off)
       - "\U000F0333"  # music-box-multiple (sidebar Media tab)
       - "\U000F0493"  # cog (sidebar Settings tab)
       - "\U000F07AE"  # cctv (sidebar Cameras tab)
+      - "\U000F0D38"  # speaker-multiple (Media card speaker button)
 
 # Card photos, from this repo's images/ folder (transparent PNG backgrounds).
 # resize keeps the aspect ratio and fits inside the given box.
@@ -995,7 +1001,6 @@ image:
     update_interval: never
     buffer_size: 65536
     on_download_finished:
-      - logger.log: {level: INFO, tag: media, format: "Art shown"}
       - lvgl.image.update: {id: media_art, src: media_art_img}
       - lvgl.widget.show: media_art
     on_error:
@@ -1114,7 +1119,7 @@ lvgl:
     # blue-violet fill in their "checked:" block).
     - id: heater_mode_btn
       width: 112
-      height: 110
+      height: 86
       radius: 12
       pad_all: 0
       bg_opa: TRANSP
@@ -1177,6 +1182,184 @@ lvgl:
       bg_color: 0x667386
       bg_grad_color: 0x414D60
       bg_grad_dir: VER
+
+  # Heating and Cooling timer window, opened under the Delay on / Delay off
+  # buttons (heater_sched_popup_toggle places it). On the top layer so it can
+  # overlap the cards below the heater card. Rollers are hours and minutes:
+  # a 24 h clock time ("Fixed time") or a duration ("Delay").
+  top_layer:
+    widgets:
+      - obj:
+          id: heater_sched_popup
+          x: 897
+          y: 308
+          width: 353
+          height: 270
+          hidden: true
+          radius: 14
+          bg_color: 0x151D2B
+          border_color: 0x4A64B8
+          border_width: 1
+          shadow_color: 0x000000
+          shadow_width: 24
+          shadow_opa: 60%
+          pad_all: 0
+          scrollable: false
+          widgets:
+            - label:
+                id: heater_sched_popup_title
+                x: 16
+                y: 12
+                text: "Delay on"
+                text_font: font_body
+                text_color: 0xFFFFFF
+            - button:
+                align: TOP_RIGHT
+                x: -6
+                y: 4
+                width: 40
+                height: 40
+                bg_opa: TRANSP
+                border_width: 0
+                shadow_width: 0
+                on_click:
+                  - lvgl.widget.hide: heater_sched_popup
+                widgets:
+                  - label: {align: CENTER, text: "\U000F0156", text_font: font_mdi_24, text_color: 0xA7B2C4}
+            - button:
+                id: heater_sched_type_time_btn
+                x: 16
+                y: 48
+                width: 155
+                height: 40
+                radius: 10
+                bg_color: 0x1A2333
+                border_color: 0x2F3B52
+                border_width: 1
+                shadow_width: 0
+                checked:
+                  bg_color: 0x4F5BD5
+                  border_color: 0x8B9BFF
+                on_click:
+                  - lambda: id(heater_sched_edit_type) = 1;
+                  - script.execute: heater_sched_popup_draw_type
+                widgets:
+                  - label: {align: CENTER, text: "Fixed time", text_font: font_small, text_color: 0xFFFFFF}
+            - button:
+                id: heater_sched_type_delay_btn
+                x: 182
+                y: 48
+                width: 155
+                height: 40
+                radius: 10
+                bg_color: 0x1A2333
+                border_color: 0x2F3B52
+                border_width: 1
+                shadow_width: 0
+                checked:
+                  bg_color: 0x4F5BD5
+                  border_color: 0x8B9BFF
+                on_click:
+                  - lambda: id(heater_sched_edit_type) = 2;
+                  - script.execute: heater_sched_popup_draw_type
+                widgets:
+                  - label: {align: CENTER, text: "Delay", text_font: font_small, text_color: 0xFFFFFF}
+            - roller:
+                id: heater_sched_hour_roller
+                x: 76
+                y: 98
+                width: 90
+                visible_row_count: 3
+                mode: INFINITE
+                text_font: font_body
+                text_color: 0x8995A7
+                bg_color: 0x0F1628
+                border_color: 0x2F3B52
+                border_width: 1
+                selected:
+                  bg_color: 0x4F5BD5
+                  text_color: 0xFFFFFF
+                options: ["00", "01", "02", "03", "04", "05", "06", "07", "08", "09", "10", "11",
+                          "12", "13", "14", "15", "16", "17", "18", "19", "20", "21", "22", "23"]
+            - label:
+                x: 168
+                y: 136
+                width: 16
+                text: ":"
+                text_align: CENTER
+                text_font: font_body
+                text_color: 0xFFFFFF
+            - roller:
+                id: heater_sched_min_roller
+                x: 186
+                y: 98
+                width: 90
+                visible_row_count: 3
+                mode: INFINITE
+                text_font: font_body
+                text_color: 0x8995A7
+                bg_color: 0x0F1628
+                border_color: 0x2F3B52
+                border_width: 1
+                selected:
+                  bg_color: 0x4F5BD5
+                  text_color: 0xFFFFFF
+                options: ["00", "01", "02", "03", "04", "05", "06", "07", "08", "09",
+                          "10", "11", "12", "13", "14", "15", "16", "17", "18", "19",
+                          "20", "21", "22", "23", "24", "25", "26", "27", "28", "29",
+                          "30", "31", "32", "33", "34", "35", "36", "37", "38", "39",
+                          "40", "41", "42", "43", "44", "45", "46", "47", "48", "49",
+                          "50", "51", "52", "53", "54", "55", "56", "57", "58", "59"]
+            # Clear removes this timer, Start saves it; both apply to a
+            # running one straight away (heater_sched_arm).
+            - button:
+                align: BOTTOM_LEFT
+                x: 16
+                y: -14
+                width: 155
+                height: 44
+                radius: 10
+                bg_color: 0x202B3B
+                border_width: 0
+                shadow_width: 0
+                on_click:
+                  - lambda: |-
+                      if (id(heater_sched_edit) == 1) id(heater_sched_on_type) = 0;
+                      else id(heater_sched_off_type) = 0;
+                  - lvgl.widget.hide: heater_sched_popup
+                  - script.execute: {id: heater_sched_arm, which: !lambda 'return id(heater_sched_edit);'}
+                widgets:
+                  - label: {align: CENTER, text: "Clear", text_font: font_body, text_color: 0xFFFFFF}
+            - button:
+                align: BOTTOM_RIGHT
+                x: -16
+                y: -14
+                width: 155
+                height: 44
+                radius: 10
+                bg_color: 0x43A982
+                border_width: 0
+                shadow_width: 0
+                on_click:
+                  - lambda: |-
+                      const int h = lv_roller_get_selected(id(heater_sched_hour_roller)->obj);
+                      const int m = lv_roller_get_selected(id(heater_sched_min_roller)->obj);
+                      // A 0:00 delay is no timer.
+                      const int type = id(heater_sched_edit_type) == 2 && h == 0 && m == 0 ? 0 : id(heater_sched_edit_type);
+                      if (id(heater_sched_edit) == 1) {
+                        id(heater_sched_on_type) = type;
+                        id(heater_sched_on_h) = h;
+                        id(heater_sched_on_m) = m;
+                      } else {
+                        id(heater_sched_off_type) = type;
+                        id(heater_sched_off_h) = h;
+                        id(heater_sched_off_m) = m;
+                      }
+                  - lvgl.widget.hide: heater_sched_popup
+                  - script.execute: {id: heater_sched_arm, which: !lambda 'return id(heater_sched_edit);'}
+                widgets:
+                  - label: {align: CENTER, text: "Start", text_font: font_body, text_color: 0xFFFFFF}
+
   pages:
     - id: home_page
       # 4 rows x 13 columns. Row heights are in pixels (FR weights summing to
@@ -1193,6 +1376,9 @@ lvgl:
       bg_image_src: img_home_wallpaper
       pad_all: 0
       scrollable: false
+      # The heater timer window (top layer) belongs to this page.
+      on_unload:
+        - lvgl.widget.hide: heater_sched_popup
       # Swipe up opens settings.
       on_swipe_up:
         - lvgl.page.show:
@@ -1451,10 +1637,6 @@ lvgl:
                   height: 100%
                   scrollable: false
                   clip_corner: true
-                  # The display is 16-bit (RGB565), so a gradient can only use
-                  # a few distinct shades. 0x18243A -> 0x34466A gave just 3-8
-                  # steps per channel (wide visible stripes); this wider range
-                  # gives 6-16 steps, so the bands are much finer.
                   bg_color: 0x14203A
                   bg_grad_color: 0x40609A
                   bg_grad_dir: VER
@@ -1507,7 +1689,6 @@ lvgl:
                   width: 100%
                   height: 100%
                   scrollable: false
-                  # Blue glass, as on the media card.
                   bg_color: 0x23335E
                   bg_grad_color: 0x0F1628
                   bg_grad_dir: VER
@@ -1619,36 +1800,33 @@ lvgl:
                         text_color: 0x8DA2E0
 
                     # ---- power (top right; on = glowing ring) ----
-                    # On (heat or fan): turns both off. Off: turns the heater on.
+                    # On (heat, cool or fan): turns it off. Waiting for a
+                    # Delay on: cancels the wait. Both stop the running
+                    # timers (the saved ones stay). Off: starts the selected
+                    # mode with the timers (heater_mode_start).
                     - button:
                         id: heater_power_btn
                         styles: round_btn
                         align: TOP_RIGHT
                         x: -24
-                        y: 16
-                        width: 84
-                        height: 84
+                        y: 22
+                        width: 64
+                        height: 64
                         bg_color: 0x141B2B
                         border_color: 0x3A4660
-                        border_width: 4
+                        border_width: 3
                         on_click:
                           - if:
                               condition:
-                                lambda: return id(heater_power_on).state || id(heater_fan_on).state;
+                                lambda: |-
+                                  return id(heater_power_on).state || id(heater_fan_on).state ||
+                                         id(heater_cool_on) || id(heater_on_at) > 0;
                               then:
-                                - homeassistant.action:
-                                    action: switch.turn_off
-                                    data:
-                                      entity_id: ${heater_power_switch}
-                                - homeassistant.action:
-                                    action: switch.turn_off
-                                    data:
-                                      entity_id: ${heater_fan_switch}
+                                - lambda: id(heater_on_at) = id(heater_off_at) = 0;
+                                - script.execute: heater_mode_off
+                                - script.execute: heater_sched_draw
                               else:
-                                - homeassistant.action:
-                                    action: switch.turn_on
-                                    data:
-                                      entity_id: ${heater_power_switch}
+                                - script.execute: heater_mode_start
                         widgets:
                           - label: {align: CENTER, text: "\U000F0425", text_font: font_mdi_36, text_color: 0xFFFFFF}
 
@@ -1696,12 +1874,16 @@ lvgl:
                           - label: {align: CENTER, y: 50, text: "\U000F050F", text_font: font_mdi_36, text_color: 0x60A5FA}
 
                     # ---- right: target pill (- value +) ----
+                    # Only while the heater is on (heat or fan mode);
+                    # heater_update_buttons shows / hides it.
                     - obj:
+                        id: heater_target_pill
                         x: 300
-                        y: 120
+                        y: 110
                         width: 353
-                        height: 77
-                        radius: 38
+                        height: 66
+                        radius: 33
+                        hidden: true
                         bg_color: 0x151D2B
                         border_color: 0x2F3B52
                         border_width: 1
@@ -1711,9 +1893,9 @@ lvgl:
                           - button:
                               styles: round_btn
                               align: LEFT_MID
-                              x: 10
-                              width: 58
-                              height: 58
+                              x: 7
+                              width: 52
+                              height: 52
                               bg_color: 0x1A2333
                               border_color: 0x2F3B52
                               border_width: 1
@@ -1724,7 +1906,7 @@ lvgl:
                           - label:
                               id: heater_target_title
                               align: CENTER
-                              y: -18
+                              y: -16
                               text: "Target"
                               text_font: font_body
                               text_color: 0x9DB4FF
@@ -1734,14 +1916,14 @@ lvgl:
                           - label:
                               id: heater_target_label
                               align: CENTER
-                              y: 12
+                              y: 11
                               text: "--°"
                               text_font: font_temp_big
                               text_color: 0xFFFFFF
                           - label:
                               id: heater_speed_label
                               align: CENTER
-                              y: 12
+                              y: 11
                               text: "--"
                               text_font: font_body
                               text_color: 0xFFFFFF
@@ -1749,9 +1931,9 @@ lvgl:
                           - button:
                               styles: round_btn
                               align: RIGHT_MID
-                              x: -10
-                              width: 58
-                              height: 58
+                              x: -7
+                              width: 52
+                              height: 52
                               bg_color: 0x1A2333
                               border_color: 0x2F3B52
                               border_width: 1
@@ -1760,15 +1942,83 @@ lvgl:
                               widgets:
                                 - label: {align: CENTER, text: "\U000F0415", text_font: font_mdi_36, text_color: 0xFFFFFF}
 
+                    # ---- right: Delay on / Delay off timers ----
+                    # Each button opens heater_sched_popup (top layer) to set
+                    # a clock time or a delay; the power button
+                    # uses it (heater_mode_start). The label shows the timers.
+                    - obj:
+                        id: heater_sched_card
+                        x: 300
+                        y: 184
+                        width: 353
+                        height: 66
+                        radius: 20
+                        bg_color: 0x151D2B
+                        border_color: 0x2F3B52
+                        border_width: 1
+                        pad_all: 0
+                        scrollable: false
+                        widgets:
+                          - button:
+                              id: heater_delay_on_btn
+                              styles: round_btn
+                              align: LEFT_MID
+                              x: 8
+                              width: 48
+                              height: 48
+                              bg_color: 0x1A2333
+                              border_color: 0x2F3B52
+                              border_width: 1
+                              # Timer saved: card's red at 50% (breathes while
+                              # it counts down, heater_sched_draw).
+                              checked:
+                                bg_color: 0xE03E1D
+                                bg_opa: 50%
+                                border_color: 0x8B9BFF
+                                border_width: 2
+                              on_click:
+                                - script.execute: {id: heater_sched_popup_toggle, which: 1}
+                              widgets:
+                                - label: {align: CENTER, text: "\U000F1A3A", text_font: font_mdi_36, text_color: 0x34D399}
+                          - button:
+                              id: heater_delay_off_btn
+                              styles: round_btn
+                              align: LEFT_MID
+                              x: 64
+                              width: 48
+                              height: 48
+                              bg_color: 0x1A2333
+                              border_color: 0x2F3B52
+                              border_width: 1
+                              checked:
+                                bg_color: 0xE03E1D
+                                bg_opa: 50%
+                                border_color: 0x8B9BFF
+                                border_width: 2
+                              on_click:
+                                - script.execute: {id: heater_sched_popup_toggle, which: 2}
+                              widgets:
+                                - label: {align: CENTER, text: "\U000F1A3A", text_font: font_mdi_36, text_color: 0x9CA3AF}
+                          - label:
+                              id: heater_sched_label
+                              align: LEFT_MID
+                              x: 124
+                              width: 215
+                              text: "No timer"
+                              text_font: font_small
+                              text_color: 0x9DB4FF
+                              long_mode: WRAP
+
                     # ---- right: Heat / Cool / Fan ----
-                    # Heat = heater on, Fan = circulation fan on (Rinnai Touch
-                    # switches), Cool = one press of the evaporative cooler
-                    # relay (it toggles the cooler, so it has no on state).
+                    # Mode select only; the power button starts it
+                    # (heater_mode_start). Heat = heater on, Fan = circulation
+                    # fan on (Rinnai Touch switches), Cool = one press of the
+                    # evaporative cooler relay.
                     - obj:
                         x: 300
-                        y: 232
+                        y: 258
                         width: 353
-                        height: 124
+                        height: 100
                         radius: 20
                         bg_color: 0x151D2B
                         border_color: 0x2F3B52
@@ -1794,26 +2044,28 @@ lvgl:
                                 border_width: 1
                                 text_color: 0xFFFFFF
                               on_click:
-                                # Leave fan mode first, else the unit stays in it.
-                                - homeassistant.action:
-                                    action: switch.turn_off
-                                    data:
-                                      entity_id: ${heater_fan_switch}
-                                - homeassistant.action:
-                                    action: switch.turn_on
-                                    data:
-                                      entity_id: ${heater_power_switch}
+                                - lambda: id(heater_sched_mode) = 1;
+                                - script.execute: heater_update_buttons
                               widgets:
-                                - label: {align: TOP_MID, y: 16, text: "\U000F0238", text_font: font_mdi_36}
-                                - label: {align: BOTTOM_MID, y: -14, text: "Heat", text_font: font_body}
+                                - label: {align: TOP_MID, y: 8, text: "\U000F0238", text_font: font_mdi_36}
+                                - label: {align: BOTTOM_MID, y: -8, text: "Heat", text_font: font_body}
                           - button:
                               id: heater_btn_cool
                               styles: heater_mode_btn
+                              checked:
+                                bg_opa: COVER
+                                bg_color: 0x4F5BD5
+                                bg_grad_color: 0x6D4FE0
+                                bg_grad_dir: VER
+                                border_color: 0x8B9BFF
+                                border_width: 1
+                                text_color: 0xFFFFFF
                               on_click:
-                                - script.execute: cooler_press
+                                - lambda: id(heater_sched_mode) = 2;
+                                - script.execute: heater_update_buttons
                               widgets:
-                                - label: {align: TOP_MID, y: 16, text: "\U000F0717", text_font: font_mdi_36}
-                                - label: {align: BOTTOM_MID, y: -14, text: "Cool", text_font: font_body}
+                                - label: {align: TOP_MID, y: 8, text: "\U000F0717", text_font: font_mdi_36}
+                                - label: {align: BOTTOM_MID, y: -8, text: "Cool", text_font: font_body}
                           - button:
                               id: heater_btn_fan
                               styles: heater_mode_btn
@@ -1826,13 +2078,11 @@ lvgl:
                                 border_width: 1
                                 text_color: 0xFFFFFF
                               on_click:
-                                - homeassistant.action:
-                                    action: switch.turn_on
-                                    data:
-                                      entity_id: ${heater_fan_switch}
+                                - lambda: id(heater_sched_mode) = 3;
+                                - script.execute: heater_update_buttons
                               widgets:
-                                - label: {align: TOP_MID, y: 16, text: "\U000F0210", text_font: font_mdi_36}
-                                - label: {align: BOTTOM_MID, y: -14, text: "Fan", text_font: font_body}
+                                - label: {align: TOP_MID, y: 8, text: "\U000F0210", text_font: font_mdi_36}
+                                - label: {align: BOTTOM_MID, y: -8, text: "Fan", text_font: font_body}
 
         # =====================================================================
         # 8. SECURITY CAMERAS               col 1 span 5 | row 2
@@ -3169,6 +3419,7 @@ lvgl:
         - lvgl.widget.hide: media_art
         - online_image.release: media_art_img
         - lambda: id(media_picture) = "";
+        - lvgl.widget.hide: media_speaker_picker
       on_swipe_right:
         - lvgl.page.show:
             id: home_page
@@ -3215,8 +3466,9 @@ lvgl:
               # =====================================================================
               # 7. MEDIA PLAYER: left half of the page (card about 624x716)
               # The player named in ${media_player_select_entity}. media_poll reads
-              # its state from HA every 3 s while this page is shown;
-              # media_draw / media_tick fill the widgets.
+              # its state from HA when this page opens, after a button press and
+              # at the end of a track; media_draw / media_tick fill the widgets
+              # and count the progress locally in between.
               # Top to bottom: 360 px album art, title, artist, progress bar with
               # times, prev / play / next, volume.
               # =====================================================================
@@ -3389,6 +3641,29 @@ lvgl:
                               text_align: RIGHT
                               text_font: font_small
                               text_color: 0x9DB4FF
+                          # Speaker choice: opens media_speaker_picker with the
+                          # ${media_speaker_select_entity} options.
+                          - button:
+                              id: media_speaker_btn
+                              styles: round_btn
+                              align: TOP_MID
+                              x: -232
+                              y: 556
+                              width: 84
+                              height: 84
+                              bg_color: 0x1A2333
+                              border_color: 0x2F3B52
+                              border_width: 1
+                              on_click:
+                                - if:
+                                    condition:
+                                      lambda: return !lv_obj_has_flag(id(media_speaker_picker), LV_OBJ_FLAG_HIDDEN);
+                                    then:
+                                      - lvgl.widget.hide: media_speaker_picker
+                                    else:
+                                      - script.execute: media_speakers_fetch
+                              widgets:
+                                - label: {align: CENTER, text: "\U000F0D38", text_font: font_mdi_36, text_color: 0x9DB4FF}
                           # Controls, centred under the progress bar.
                           - button:
                               id: media_prev_btn
@@ -3524,6 +3799,64 @@ lvgl:
                                               char buf[8];
                                               snprintf(buf, sizeof(buf), "%.2f", id(media_volume));
                                               return std::string(buf);
+                          # Speaker picker over the album art: one row per
+                          # ${media_speaker_select_entity} option, built by
+                          # media_speakers_fetch (the current player highlighted).
+                          # Declared last so it sits on top of the card.
+                          - obj:
+                              id: media_speaker_picker
+                              align: TOP_MID
+                              y: 32
+                              width: 440
+                              height: 520
+                              hidden: true
+                              radius: 14
+                              bg_color: 0x151D2B
+                              border_color: 0x4A64B8
+                              border_width: 1
+                              shadow_color: 0x000000
+                              shadow_width: 24
+                              shadow_opa: 60%
+                              pad_all: 0
+                              scrollable: false
+                              widgets:
+                                - label:
+                                    x: 20
+                                    y: 16
+                                    text: "Speaker"
+                                    text_font: font_body
+                                    text_color: 0xFFFFFF
+                                - button:
+                                    align: TOP_RIGHT
+                                    x: -8
+                                    y: 6
+                                    width: 44
+                                    height: 44
+                                    bg_opa: TRANSP
+                                    border_width: 0
+                                    shadow_width: 0
+                                    on_click:
+                                      - lvgl.widget.hide: media_speaker_picker
+                                    widgets:
+                                      - label: {align: CENTER, text: "\U000F0156", text_font: font_mdi_24, text_color: 0xA7B2C4}
+                                # Rows inherit the font and colour from here.
+                                # Its rows are added at runtime, so the column
+                                # layout is set there too (media_speakers_fetch):
+                                # ESPHome only takes a layout with YAML widgets.
+                                - obj:
+                                    id: media_speaker_list
+                                    x: 12
+                                    y: 58
+                                    width: 416
+                                    height: 450
+                                    bg_opa: TRANSP
+                                    border_width: 0
+                                    pad_all: 0
+                                    pad_row: 8
+                                    text_font: font_body
+                                    text_color: 0xFFFFFF
+                                    scrollable: true
+                                    scrollbar_mode: "active"
 
     # ==================================================================
     # INTERCOM: the VoIP intercom card; shown automatically when a call comes in
@@ -4845,11 +5178,11 @@ globals:
     restore_value: false
     initial_value: "NAN"
 
-  # DEBUG: millis() of the last main-loop heartbeat (loop_monitor).
-  - id: loop_beat
-    type: uint32_t
+  # Media card speaker picker: the ${media_speaker_select_entity} options
+  # (media_player entity ids), in the order of the picker rows.
+  - id: media_speakers
+    type: std::vector<std::string>
     restore_value: false
-    initial_value: "0"
 
   # Security page action waiting for Confirm: 1 unlock front door, 2 unlock
   # garage door, 3 roller door button (0 = none).
@@ -4857,6 +5190,64 @@ globals:
     type: int
     restore_value: false
     initial_value: "0"
+
+  # Heating and Cooling timers, set in heater_sched_popup and used when the
+  # power button starts the selected mode; each is kept until it fires.
+  # Type: 0 none, 1 at a clock time (h:m), 2 after a delay (h hours m minutes).
+  - id: heater_sched_on_type
+    type: int
+    restore_value: false
+    initial_value: "0"
+  - id: heater_sched_on_h
+    type: int
+    restore_value: false
+    initial_value: "0"
+  - id: heater_sched_on_m
+    type: int
+    restore_value: false
+    initial_value: "0"
+  - id: heater_sched_off_type
+    type: int
+    restore_value: false
+    initial_value: "0"
+  - id: heater_sched_off_h
+    type: int
+    restore_value: false
+    initial_value: "0"
+  - id: heater_sched_off_m
+    type: int
+    restore_value: false
+    initial_value: "0"
+  # Timer window being edited: 1 Delay on, 2 Delay off; and its type.
+  - id: heater_sched_edit
+    type: int
+    restore_value: false
+    initial_value: "1"
+  - id: heater_sched_edit_type
+    type: int
+    restore_value: false
+    initial_value: "2"
+  # Running timers (UTC epoch, 0 = none) for heater_sched_mode;
+  # heater_sched_check runs them.
+  - id: heater_on_at
+    type: int64_t
+    restore_value: false
+    initial_value: "0"
+  - id: heater_off_at
+    type: int64_t
+    restore_value: false
+    initial_value: "0"
+  # Selected mode (Heat / Cool / Fan buttons): 1 Heat, 2 Cool, 3 Fan.
+  - id: heater_sched_mode
+    type: int
+    restore_value: false
+    initial_value: "1"
+  # Evaporative cooler on, as far as this panel knows (its relay only
+  # toggles it and reports nothing).
+  - id: heater_cool_on
+    type: bool
+    restore_value: false
+    initial_value: "false"
 
 script:
   # Media card: read the selected player's state from HA's REST API
@@ -4870,10 +5261,6 @@ script:
               - api.connected:
               - lambda: return id(media_entity).state.rfind("media_player.", 0) == 0;
           then:
-            - logger.log:
-                level: INFO
-                tag: media
-                format: "State request"
             - http_request.get:
                 url: !lambda 'return std::string("${ha_base_url}/api/states/") + id(media_entity).state;'
                 request_headers:
@@ -5004,16 +5391,10 @@ script:
           condition:
             lambda: return id(media_entity).state.rfind("media_player.", 0) == 0;
           then:
-            - logger.log:
-                level: INFO
-                tag: media
-                format: "Command %s"
-                args: ['service.c_str()']
             - homeassistant.action:
                 action: !lambda 'return service;'
                 data:
                   entity_id: !lambda 'return id(media_entity).state;'
-            - logger.log: {level: INFO, tag: media, format: "Command sent"}
             - delay: 800ms
             - script.execute: media_poll
 
@@ -5028,11 +5409,6 @@ script:
           condition:
             lambda: return !id(media_picture).empty() && id(entertainment_page)->is_showing();
           then:
-            - logger.log:
-                level: INFO
-                tag: media
-                format: "Art download: %s"
-                args: ['id(media_picture).c_str()']
             - online_image.set_url:
                 id: media_art_img
                 url: !lambda |-
@@ -5065,6 +5441,104 @@ script:
                   enqueue: replace
             - delay: 1500ms
             - script.execute: media_poll
+
+  # Speaker button: read the ${media_speaker_select_entity} options from HA's
+  # REST API (after a running state poll, one request at a time), fill
+  # media_speaker_list with one row per speaker and show the picker.
+  - id: media_speakers_fetch
+    mode: single
+    then:
+      - wait_until:
+          condition:
+            lambda: return !id(media_poll).is_running();
+          timeout: 5s
+      - http_request.get:
+          url: "${ha_base_url}/api/states/${media_speaker_select_entity}"
+          request_headers:
+            Authorization: "Bearer ${ha_token}"
+          capture_response: true
+          max_response_buffer_size: 8192
+          on_response:
+            then:
+              - lambda: |-
+                  if (response->status_code != 200) {
+                    ESP_LOGW("media", "HA returned HTTP %d for ${media_speaker_select_entity}", response->status_code);
+                    return;
+                  }
+                  JsonDocument filter;
+                  filter["attributes"]["options"] = true;
+                  JsonDocument doc;
+                  const auto err = deserializeJson(doc, body, DeserializationOption::Filter(filter));
+                  if (err) {
+                    ESP_LOGW("media", "Bad speaker list JSON: %s", err.c_str());
+                    return;
+                  }
+                  auto &speakers = id(media_speakers);
+                  speakers.clear();
+                  for (JsonVariantConst v : doc["attributes"]["options"].as<JsonArrayConst>())
+                    speakers.push_back(v | "");
+
+                  lv_obj_t *list = id(media_speaker_list);
+                  lv_obj_clean(list);
+                  lv_obj_set_flex_flow(list, LV_FLEX_FLOW_COLUMN);
+                  lv_obj_set_flex_align(list, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_START);
+                  for (const auto &entity : speakers) {
+                    // "media_player.living_room_speaker_2" -> "Living room speaker 2"
+                    std::string name = entity.substr(entity.find('.') + 1);
+                    for (auto &c : name) if (c == '_') c = ' ';
+                    if (!name.empty()) name[0] = toupper(name[0]);
+                    const bool current = entity == id(media_entity).state;
+                    lv_obj_t *row = lv_button_create(list);
+                    lv_obj_set_size(row, lv_pct(100), 60);
+                    lv_obj_set_style_radius(row, 10, LV_PART_MAIN);
+                    lv_obj_set_style_shadow_width(row, 0, LV_PART_MAIN);
+                    lv_obj_set_style_bg_color(row, lv_color_hex(current ? 0x4F5BD5 : 0x202B3B), LV_PART_MAIN);
+                    lv_obj_set_style_border_color(row, lv_color_hex(current ? 0x8B9BFF : 0x34445A), LV_PART_MAIN);
+                    lv_obj_set_style_border_width(row, 1, LV_PART_MAIN);
+                    lv_obj_t *label = lv_label_create(row);
+                    lv_label_set_text(label, name.c_str());
+                    lv_label_set_long_mode(label, LV_LABEL_LONG_DOT);
+                    lv_obj_set_width(label, lv_pct(100));
+                    lv_obj_align(label, LV_ALIGN_LEFT_MID, 8, 0);
+                    // Row index = position in media_speakers.
+                    lv_obj_add_event_cb(row, [](lv_event_t *e) {
+                      auto *target = static_cast<lv_obj_t *>(lv_event_get_current_target(e));
+                      id(media_speaker_pick).execute((int) lv_obj_get_index(target));
+                    }, LV_EVENT_CLICKED, nullptr);
+                  }
+                  if (speakers.empty()) {
+                    lv_obj_t *label = lv_label_create(list);
+                    lv_label_set_text(label, "No speakers in ${media_speaker_select_entity}");
+                  }
+              - lvgl.widget.show: media_speaker_picker
+          on_error:
+            - logger.log:
+                level: WARN
+                tag: media
+                format: "Speaker list request failed"
+
+  # Speaker picked (row index): select it in ${media_speaker_select_entity}
+  # and write its entity id into ${media_player_select_entity}, which
+  # switches the card to that player (media_entity on_value).
+  - id: media_speaker_pick
+    parameters:
+      which: int
+    then:
+      - lvgl.widget.hide: media_speaker_picker
+      - if:
+          condition:
+            lambda: return which >= 0 && which < (int) id(media_speakers).size();
+          then:
+            - homeassistant.action:
+                action: input_select.select_option
+                data:
+                  entity_id: ${media_speaker_select_entity}
+                  option: !lambda 'return id(media_speakers)[which];'
+            - homeassistant.action:
+                action: input_text.set_value
+                data:
+                  entity_id: ${media_player_select_entity}
+                  value: !lambda 'return id(media_speakers)[which];'
 
   # Home page clock card: time (no seconds), day and date.
   - id: update_clock
@@ -5856,28 +6330,285 @@ script:
       - delay: 250ms
       - switch.turn_off: cooler_relay
 
-  # Gas heater card: Heat / Fan highlight, the power ring and the target pill
+  # Rinnai switch changed (also from Home Assistant or the wall controller):
+  # select the mode it runs in, then redraw. The Rinnai on/off switch stays
+  # on in fan mode, so fan on = Fan, otherwise power on = Heat.
+  - id: heater_state_changed
+    then:
+      - lambda: |-
+          if (id(heater_fan_on).state) id(heater_sched_mode) = 3;
+          else if (id(heater_power_on).state) id(heater_sched_mode) = 1;
+      - script.execute: heater_update_buttons
+
+  # Gas heater card: selected mode, the power ring and the target pill
   # (in fan-only mode the Rinnai "target" is the fan speed, 1-16).
   - id: heater_update_buttons
     then:
-      # The Rinnai on/off switch stays on in fan mode, so the circulation fan
-      # switch decides the mode: fan on = Fan, otherwise power on = Heat.
       - lvgl.widget.update:
           id: heater_btn_heat
           state:
-            checked: !lambda 'return id(heater_power_on).state && !id(heater_fan_on).state;'
+            checked: !lambda 'return id(heater_sched_mode) == 1;'
+      - lvgl.widget.update:
+          id: heater_btn_cool
+          state:
+            checked: !lambda 'return id(heater_sched_mode) == 2;'
       - lvgl.widget.update:
           id: heater_btn_fan
           state:
-            checked: !lambda 'return id(heater_fan_on).state;'
+            checked: !lambda 'return id(heater_sched_mode) == 3;'
       - lambda: |-
-          const bool on = id(heater_power_on).state || id(heater_fan_on).state;
+          const bool rinnai = id(heater_power_on).state || id(heater_fan_on).state;
+          const bool on = rinnai || id(heater_cool_on);
           lv_obj_t *btn = id(heater_power_btn);
           lv_obj_set_style_border_color(btn, lv_color_hex(on ? 0x8B7CF6 : 0x3A4660), LV_PART_MAIN);
           lv_obj_set_style_shadow_color(btn, lv_color_hex(0x6366F1), LV_PART_MAIN);
           lv_obj_set_style_shadow_width(btn, on ? 18 : 0, LV_PART_MAIN);
           lv_obj_set_style_shadow_opa(btn, LV_OPA_50, LV_PART_MAIN);
+          // Target / fan speed only mean something while the heater is on.
+          if (rinnai) lv_obj_clear_flag(id(heater_target_pill), LV_OBJ_FLAG_HIDDEN);
+          else lv_obj_add_flag(id(heater_target_pill), LV_OBJ_FLAG_HIDDEN);
       - script.execute: heater_draw_target
+
+  # Power button pressed while off: start the selected mode now, or at the
+  # Delay on time; with a Delay off timer, turn off at its clock time or that
+  # long after turning on.
+  - id: heater_mode_start
+    then:
+      - script.execute: {id: heater_sched_arm, which: 0}
+      - if:
+          condition:
+            lambda: return id(heater_on_at) == 0;
+          then:
+            - script.execute: {id: heater_mode_on, mode: !lambda 'return id(heater_sched_mode);'}
+
+  # Set heater_on_at / heater_off_at from the saved timers. which 0: power
+  # pressed (both timers start). 1 / 2: the Delay on / off timer was saved or
+  # cleared; it restarts from now if it is already counting (Delay on) or
+  # the mode is waiting or running (Delay off), else it waits for the power
+  # button. Without a clock the timers are ignored.
+  - id: heater_sched_arm
+    parameters:
+      which: int
+    then:
+      - lambda: |-
+          const auto now = id(my_time).now();
+          if (!now.is_valid()) {
+            if (which == 0 && (id(heater_sched_on_type) || id(heater_sched_off_type)))
+              ESP_LOGW("heater", "No time yet: timers ignored, turning on now");
+            id(heater_on_at) = id(heater_off_at) = 0;
+            return;
+          }
+          // Next local h:m after `from`, or `from` + the h:m delay.
+          auto when = [](int64_t from, int type, int h, int m) -> int64_t {
+            if (type == 2) return from + h * 3600 + m * 60;
+            const ESPTime t = ESPTime::from_epoch_local(from);
+            int64_t s = h * 3600 + m * 60 - (t.hour * 3600 + t.minute * 60 + t.second);
+            if (s <= 0) s += 86400;
+            return from + s;
+          };
+          const bool waiting = id(heater_on_at) > 0;
+          const bool running = id(heater_power_on).state || id(heater_fan_on).state || id(heater_cool_on);
+          if (which == 0)
+            id(heater_on_at) = id(heater_sched_on_type)
+                ? when(now.timestamp, id(heater_sched_on_type), id(heater_sched_on_h), id(heater_sched_on_m)) : 0;
+          else if (which == 1 && waiting)   // Delay on cleared: start now (next check)
+            id(heater_on_at) = id(heater_sched_on_type)
+                ? when(now.timestamp, id(heater_sched_on_type), id(heater_sched_on_h), id(heater_sched_on_m))
+                : now.timestamp;
+          // The Delay off counts from the start.
+          if (which == 0 || (which == 1 && waiting) || (which == 2 && (waiting || running))) {
+            const int64_t start = id(heater_on_at) ? id(heater_on_at) : now.timestamp;
+            id(heater_off_at) = id(heater_sched_off_type)
+                ? when(start, id(heater_sched_off_type), id(heater_sched_off_h), id(heater_sched_off_m)) : 0;
+          }
+      - script.execute: heater_sched_draw
+
+  - id: heater_mode_on
+    parameters:
+      mode: int
+    then:
+      - if:
+          condition:
+            lambda: return mode == 1;
+          then:
+            # Leave fan mode first, else the unit stays in it.
+            - homeassistant.action:
+                action: switch.turn_off
+                data:
+                  entity_id: ${heater_fan_switch}
+            - homeassistant.action:
+                action: switch.turn_on
+                data:
+                  entity_id: ${heater_power_switch}
+      # The cooler button only toggles: press it only if it is off.
+      - if:
+          condition:
+            lambda: return mode == 2 && !id(heater_cool_on);
+          then:
+            - lambda: id(heater_cool_on) = true;
+            - script.execute: cooler_press
+            - script.execute: heater_update_buttons
+      - if:
+          condition:
+            lambda: return mode == 3;
+          then:
+            - homeassistant.action:
+                action: switch.turn_on
+                data:
+                  entity_id: ${heater_fan_switch}
+
+  # Turn off whatever runs: both Rinnai switches, and another press of the
+  # cooler button if this panel turned it on.
+  - id: heater_mode_off
+    then:
+      - if:
+          condition:
+            lambda: return id(heater_cool_on);
+          then:
+            - lambda: id(heater_cool_on) = false;
+            - script.execute: cooler_press
+            - script.execute: heater_update_buttons
+      - if:
+          condition:
+            lambda: return id(heater_power_on).state || id(heater_fan_on).state;
+          then:
+            - homeassistant.action:
+                action: switch.turn_off
+                data:
+                  entity_id: ${heater_power_switch}
+            - homeassistant.action:
+                action: switch.turn_off
+                data:
+                  entity_id: ${heater_fan_switch}
+
+  # Every second: run a timer that is due. A timer is used up when it fires.
+  - id: heater_sched_check
+    then:
+      - if:
+          condition:
+            lambda: |-
+              const auto now = id(my_time).now();
+              return id(heater_on_at) > 0 && now.is_valid() && now.timestamp >= id(heater_on_at);
+          then:
+            - lambda: id(heater_on_at) = id(heater_sched_on_type) = 0;
+            - script.execute: {id: heater_mode_on, mode: !lambda 'return id(heater_sched_mode);'}
+            - script.execute: heater_sched_draw
+      - if:
+          condition:
+            lambda: |-
+              const auto now = id(my_time).now();
+              return id(heater_off_at) > 0 && now.is_valid() && now.timestamp >= id(heater_off_at);
+          then:
+            - lambda: id(heater_off_at) = id(heater_sched_off_type) = 0;
+            - script.execute: heater_mode_off
+            - script.execute: heater_sched_draw
+
+  # Timer label and buttons: a running timer ("Heat on 18:30", "Off 21:00";
+  # the button breathes) or a saved one waiting for the power button
+  # ("On in 1h 30m"; the button is red at 50 %).
+  - id: heater_sched_draw
+    then:
+      - lambda: |-
+          static const char *const MODES[] = {"", "Heat", "Cool", "Fan"};
+          auto clock = [](int64_t t) { return ESPTime::from_epoch_local(t).strftime("%H:%M"); };
+          auto setting = [](const char *what, int type, int h, int m) {
+            char buf[32];
+            if (type == 1) snprintf(buf, sizeof(buf), "%s at %02d:%02d", what, h, m);
+            else snprintf(buf, sizeof(buf), "%s in %dh %02dm", what, h, m);
+            return std::string(buf);
+          };
+          std::string on, off;
+          if (id(heater_on_at) > 0)
+            on = std::string(MODES[id(heater_sched_mode) & 3]) + " on " + clock(id(heater_on_at));
+          else if (id(heater_sched_on_type))
+            on = setting("On", id(heater_sched_on_type), id(heater_sched_on_h), id(heater_sched_on_m));
+          if (id(heater_off_at) > 0)
+            off = "Off " + clock(id(heater_off_at));
+          else if (id(heater_sched_off_type))
+            off = setting("Off", id(heater_sched_off_type), id(heater_sched_off_h), id(heater_sched_off_m));
+          std::string text = on.empty() && off.empty() ? "No timer"
+                           : on.empty() ? off : off.empty() ? on : on + "\n" + off;
+          lv_label_set_text(id(heater_sched_label), text.c_str());
+      - lvgl.widget.update:
+          id: heater_delay_on_btn
+          state:
+            checked: !lambda 'return id(heater_on_at) > 0 || id(heater_sched_on_type) != 0;'
+      - lvgl.widget.update:
+          id: heater_delay_off_btn
+          state:
+            checked: !lambda 'return id(heater_off_at) > 0 || id(heater_sched_off_type) != 0;'
+      # Breathe the checked fill between 50 % and 10 % opacity (3 s cycle).
+      - lambda: |-
+          static const lv_anim_exec_xcb_t BREATHE = [](void *obj, int32_t v) {
+            const float opa = 77.0f + 51.0f * cosf(v * 6.2832f / 3000.0f);
+            lv_obj_set_style_bg_opa((lv_obj_t *) obj, (lv_opa_t) opa, LV_PART_MAIN | LV_STATE_CHECKED);
+          };
+          auto breathe = [](lv_obj_t *btn, bool on) {
+            const bool running = lv_anim_get(btn, BREATHE) != nullptr;
+            if (on && !running) {
+              lv_anim_t a;
+              lv_anim_init(&a);
+              lv_anim_set_var(&a, btn);
+              lv_anim_set_values(&a, 0, 3000);
+              lv_anim_set_duration(&a, 3000);
+              lv_anim_set_repeat_count(&a, LV_ANIM_REPEAT_INFINITE);
+              lv_anim_set_exec_cb(&a, BREATHE);
+              lv_anim_start(&a);
+            } else if (!on && running) {
+              lv_anim_del(btn, BREATHE);
+              lv_obj_set_style_bg_opa(btn, LV_OPA_50, LV_PART_MAIN | LV_STATE_CHECKED);
+            }
+          };
+          breathe(id(heater_delay_on_btn), id(heater_on_at) > 0);
+          breathe(id(heater_delay_off_btn), id(heater_off_at) > 0);
+
+  # Delay on (which 1) / Delay off (2) button: open the timer window under
+  # the timer card with that timer's setting (default: a delay of the last
+  # time used, or 1 h), or
+  # close it if it is already open for the same button.
+  - id: heater_sched_popup_toggle
+    parameters:
+      which: int
+    then:
+      - if:
+          condition:
+            lambda: |-
+              return !lv_obj_has_flag(id(heater_sched_popup), LV_OBJ_FLAG_HIDDEN) &&
+                     id(heater_sched_edit) == which;
+          then:
+            - lvgl.widget.hide: heater_sched_popup
+          else:
+            - lambda: |-
+                id(heater_sched_edit) = which;
+                int type = which == 1 ? id(heater_sched_on_type) : id(heater_sched_off_type);
+                int h = which == 1 ? id(heater_sched_on_h) : id(heater_sched_off_h);
+                int m = which == 1 ? id(heater_sched_on_m) : id(heater_sched_off_m);
+                // No timer saved: a delay of the last time used, or 1 h.
+                if (type == 0) {
+                  type = 2;
+                  if (h == 0 && m == 0) h = 1;
+                }
+                id(heater_sched_edit_type) = type;
+                lv_roller_set_selected(id(heater_sched_hour_roller)->obj, h, LV_ANIM_OFF);
+                lv_roller_set_selected(id(heater_sched_min_roller)->obj, m, LV_ANIM_OFF);
+                lv_label_set_text(id(heater_sched_popup_title), which == 1 ? "Delay on" : "Delay off");
+                lv_area_t card;
+                lv_obj_get_coords(id(heater_sched_card), &card);
+                lv_obj_set_pos(id(heater_sched_popup), card.x1, card.y2 + 8);
+            - script.execute: heater_sched_popup_draw_type
+            - lvgl.widget.show: heater_sched_popup
+
+  # Fixed time / Delay selector in the timer window.
+  - id: heater_sched_popup_draw_type
+    then:
+      - lvgl.widget.update:
+          id: heater_sched_type_time_btn
+          state:
+            checked: !lambda 'return id(heater_sched_edit_type) == 1;'
+      - lvgl.widget.update:
+          id: heater_sched_type_delay_btn
+          state:
+            checked: !lambda 'return id(heater_sched_edit_type) == 2;'
 
   - id: heater_draw_target
     then:
@@ -6111,13 +6842,13 @@ binary_sensor:
     entity_id: ${heater_power_switch}
     internal: true
     on_state:
-      - script.execute: heater_update_buttons
+      - script.execute: heater_state_changed
   - platform: homeassistant
     id: heater_fan_on
     entity_id: ${heater_fan_switch}
     internal: true
     on_state:
-      - script.execute: heater_update_buttons
+      - script.execute: heater_state_changed
 
 switch:
   # Echo cancellation on/off (esp_aec through esp_audio_stack).
@@ -6569,34 +7300,36 @@ text_sensor:
             return s;
 
 interval:
-  # Top-right Wi-Fi / C6 status
-  - interval: 120s
-    then:
-      - script.execute: update_status_bar
-
   # Lights card: re-sync the tiles with HA (catches a missed state update).
   - interval: 3s
     then:
       - script.execute: light_tiles_check
 
-       # Media card: re-read the player state while the Entertainment page is shown, and
-       # move the progress bar every second while playing.
-      - if:
-          condition:
-            # Not while a button command or an art download is pending: one
-            # request to HA at a time.
-            lambda: |-
-              return id(entertainment_page)->is_showing() &&
-                     !id(media_command).is_running() && !id(media_fetch_art).is_running();
-          then:
-            - script.execute: media_poll
   - interval: 1s
     then:
+      # Media card: the player state is read from HA when the page opens and
+      # after a button press (media_poll); in between, the progress bar is
+      # counted here from that position. At the end of the track, read the
+      # state again for the next one (at most every 5 s, one request at a time).
       - if:
           condition:
             lambda: return id(entertainment_page)->is_showing() && id(media_state) == "playing";
           then:
             - script.execute: media_tick
+            - if:
+                condition:
+                  lambda: |-
+                    static uint32_t last_poll = 0;
+                    const auto now = id(my_time).now();
+                    if (id(media_duration) <= 0 || id(media_pos_at) <= 0 || !now.is_valid()) return false;
+                    if (id(media_pos) + (now.timestamp - id(media_pos_at)) < id(media_duration) + 1) return false;
+                    if (id(media_poll).is_running() || id(media_command).is_running() ||
+                        id(media_fetch_art).is_running() || id(media_speakers_fetch).is_running() ||
+                        millis() - last_poll < 5000) return false;
+                    last_poll = millis();
+                    return true;
+                then:
+                  - script.execute: media_poll
 
        # Settings page uptime ticks every second, only while that page is shown.
   
@@ -6606,8 +7339,13 @@ interval:
           then:
             - script.execute: update_settings_info
 
+      # Heating and Cooling Delay on / Delay off timers.
+      - script.execute: heater_sched_check
+
   # Home page clock card. The clock shows no seconds, so every 45 s is
   # enough (the minute flips up to 45 s late).
   - interval: 45s
     then:
       - script.execute: update_clock
+      # Check the Wi-Fi signal every 45 s, too, so the status bar shows it promptly.
+      - script.execute: update_status_bar

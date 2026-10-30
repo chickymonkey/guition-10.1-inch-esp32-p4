@@ -165,8 +165,9 @@ Guition and is **not** covered by the MIT licence; see
 
 ## Setup
 
-1. **Secrets.** Add `wifi_ssid`, `wifi_password` and `camera_password` (the RTSP
-   camera login) to your ESPHome `secrets.yaml`.
+1. **Secrets.** Add `wifi_ssid`, `wifi_password`, `camera_password` (the RTSP
+   camera login) and `ha_token` (a Home Assistant long-lived access token, for
+   the media card) to your ESPHome `secrets.yaml`.
 2. **Home Assistant entities.** Edit the substitutions at the top of the YAML to
    match your entities: heater, locks, garage door, power and energy,
    temperatures, soil moisture, scenes and Frigate snapshots. Set `ha_base_url`
@@ -183,6 +184,51 @@ Guition and is **not** covered by the MIT licence; see
 6. **Soil history.** The sensor needs a `state_class` so that Home Assistant
    keeps long-term statistics for it. The two history values are the 9–10 am
    average of each day.
+7. **Media player and speaker picker.** See below.
+
+### Media player and speaker picker
+
+The Entertainment page controls one Home Assistant media player at a time. It
+reads the player's state from Home Assistant's REST API, so it needs a
+long-lived access token (Home Assistant profile → Security) in `secrets.yaml`
+as `ha_token`.
+
+Two helpers choose the player:
+
+| Substitution | Helper | Holds |
+|---|---|---|
+| `media_player_select_entity` | `input_text.living_room_player` | The entity id of the player the card shows and controls |
+| `media_speaker_select_entity` | `input_select.dropdown_speakers` | The players offered by the speaker button |
+
+Create them in Home Assistant (**Settings → Devices & services → Helpers**, or in
+YAML). The input_select options must be media_player **entity ids**, not
+friendly names:
+
+```yaml
+input_text:
+  living_room_player:
+    name: Living room player
+    max: 100
+    initial: media_player.living_room_speaker_2
+
+input_select:
+  dropdown_speakers:
+    name: Speakers
+    options:
+      - media_player.living_room_speaker_2
+      - media_player.kitchen_speaker
+      - media_player.bedroom_speaker
+```
+
+The speaker button (left of Previous) reads the options each time it opens, so
+adding a speaker only needs a new option in Home Assistant, not a reflash. The
+list shows each entity id as a name (`media_player.kitchen_speaker` becomes
+"Kitchen speaker") and highlights the current player. Tapping a speaker selects
+it in `input_select.dropdown_speakers` and writes its entity id into
+`input_text.living_room_player`; the card then switches to that player.
+
+The play button starts the `media_default_playlist` playlist through Music
+Assistant when the player has nothing loaded.
 
 ### Board revision
 
