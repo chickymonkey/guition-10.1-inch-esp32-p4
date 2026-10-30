@@ -26,6 +26,10 @@ drive the UI directly. Board-specific changes are marked `[GUITION]` in the YAML
 | RTC | RX8025T (0x32) |
 | Button | BOOT button, GPIO35 |
 
+### Power
+
+This screen needs 5v 2A power supply from USB-C, if the boards restarts when you try VoIP/Intercom, this might be the cause.
+
 ## Dimension
 
 Panel: 241 x 156 mm
