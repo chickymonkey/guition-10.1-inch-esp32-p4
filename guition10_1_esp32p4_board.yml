@@ -143,6 +143,14 @@ substitutions:
   # Music Assistant playlist started by the play button when the player has
   # nothing loaded (shuffled, replacing the empty queue).
   media_default_playlist: "Every Songs"
+  # Calendar page: this month's and next month's events from three HA
+  # calendars (read with ha_token), with the names shown in its legend.
+  calendar_bins_entity: calendar.city_of_casey_bin_date
+  calendar_bins_name: "Bins"
+  calendar_personal_entity: calendar.fuchenggang85_gmail_com
+  calendar_personal_name: "Personal"
+  calendar_school_entity: calendar.vic_school_term
+  calendar_school_name: "School"
   ha_token: !secret ha_token
 
 # Shared packages: P4 base/hosted Wi-Fi, VoIP transport and settings, JPEG
@@ -224,6 +232,7 @@ esp32:
     advanced:
       execute_from_psram: true
       compiler_optimization: "PERF"
+      flash_chip: generic
 
 # =======EXTERNAL COMPONENTS===================================================
 
@@ -273,9 +282,14 @@ esp_rtsp_stream:
 # entity updates (see the snapshot text sensors and the online_image entries
 # in image: below).
 
+# Requests to HA run in the main loop and wait for the reply. A slow one (the
+# Google calendar, which HA fetches live) held the loop past the 5 s task
+# watchdog and rebooted the panel, so the watchdog gets more time than the
+# request timeout while a request runs.
 http_request:
   verify_ssl: false
   timeout: 10s
+  watchdog_timeout: 15s
 
 # =======CONNECTIVITY==========================================================
 
@@ -378,10 +392,13 @@ time:
     id: my_time
     timezone: Australia/Sydney
     # Show the clock as soon as the time is known, not at the next 45 s tick.
-    # The history fetches need the time, which can arrive after the API
-    # connects (on_client_connected then skips them); fetch here if still empty.
     on_time_sync:
       - script.execute: update_clock
+      - if:
+          condition:
+            lambda: return id(cal_events).empty();
+          then:
+            - script.execute: calendar_fetch
       - if:
           condition:
             lambda: return std::isnan(id(energy_history)[13]);
@@ -758,6 +775,16 @@ font:
     size: 22
     glyphsets: [GF_Latin_Core]
 
+  # Clock card event titles.
+  - file:
+      type: gfonts
+      family: Roboto
+      weight: 400
+    id: font_body_20
+    bpp: 4             # anti-aliased (default 1 bpp is jagged)
+    size: 20
+    glyphsets: [GF_Latin_Core]
+
   - file:
       type: gfonts
       family: Roboto
@@ -811,7 +838,7 @@ font:
       weight: 600
     id: font_clock_big
     bpp: 4             # anti-aliased (default 1 bpp is jagged)
-    size: 150          # sized for the wider clock card
+    size: 150          # clock card, above the event row
     glyphs: "0123456789:-"
 
   # Gas heater card: current and target temperature (digits and degree only).
@@ -915,6 +942,7 @@ font:
       - "\U000F0493"  # cog (sidebar Settings tab)
       - "\U000F07AE"  # cctv (sidebar Cameras tab)
       - "\U000F0D38"  # speaker-multiple (Media card speaker button)
+      - "\U000F00ED"  # calendar (sidebar Calendar tab)
 
 # Card photos, from this repo's images/ folder (transparent PNG backgrounds).
 # resize keeps the aspect ratio and fits inside the given box.
@@ -1104,7 +1132,22 @@ lvgl:
       radius: 14
       pad_all: 0
       text_color: 0xE8EDF5
-      
+    # Clock card: one event column (time, then a one-line title) and its
+    # calendar colour bar.
+    - id: clock_ev_row
+      width: 144
+      height: 50
+      bg_opa: TRANSP
+      border_width: 0
+      radius: 0
+      pad_all: 0
+    - id: clock_ev_bar
+      width: 4
+      height: 44
+      radius: 2
+      border_width: 0
+      bg_opa: COVER
+
     - id: icon_24
       text_font: font_mdi_24
       text_color: 0xE8EDF5
@@ -1517,7 +1560,7 @@ lvgl:
                   text_color: 0xA7B2C4
 
         # =====================================================================
-        # SIDEBAR: one tab per page               col 0 | row 1 span 3
+        # SIDEBAR: one tab per page               col 0 | row 1 span 2
         # =====================================================================
         - obj:
             styles: cell_style
@@ -1525,7 +1568,7 @@ lvgl:
             grid_cell_column_pos: 0
             grid_cell_row_pos: 1
             grid_cell_column_span: 1
-            grid_cell_row_span: 3
+            grid_cell_row_span: 2
             grid_cell_x_align: STRETCH
             grid_cell_y_align: STRETCH
             layout:
@@ -1533,13 +1576,13 @@ lvgl:
               flex_flow: COLUMN
               flex_align_main: START
               flex_align_cross: CENTER
-              pad_row: 12
+              pad_row: 12         # 8 x 75 + 7 x 12 = 684 px: the cards' top to bottom edge
             widgets:
               - button:
                   id: nav_home_btn
                   styles: scene_btn
                   width: 100%
-                  height: 84
+                  height: 75
                   bg_color: 0x4F7FE8
                   border_color: 0x82A5FF
                   widgets:
@@ -1548,7 +1591,7 @@ lvgl:
                   id: nav_cameras_btn
                   styles: scene_btn
                   width: 100%
-                  height: 84
+                  height: 75
                   on_click:
                     - lvgl.page.show:
                         id: cam_front_page
@@ -1557,10 +1600,22 @@ lvgl:
                   widgets:
                     - label: {align: CENTER, text: "\U000F07AE", text_font: font_mdi_36, text_color: 0x008080}   # Cameras (mdi:cctv): teal
               - button:
+                  id: nav_calendar_btn
+                  styles: scene_btn
+                  width: 100%
+                  height: 75
+                  on_click:
+                    - lvgl.page.show:
+                        id: calendar_page
+                        animation: MOVE_LEFT
+                        time: 250ms
+                  widgets:
+                    - label: {align: CENTER, text: "\U000F00ED", text_font: font_mdi_36, text_color: 0xE57373}   # Calendar: soft red
+              - button:
                   id: nav_security_btn
                   styles: scene_btn
                   width: 100%
-                  height: 84
+                  height: 75
                   on_click:
                     - lvgl.page.show:
                         id: security_page
@@ -1572,7 +1627,7 @@ lvgl:
                   id: nav_energy_btn
                   styles: scene_btn
                   width: 100%
-                  height: 84
+                  height: 75
                   on_click:
                     - lvgl.page.show:
                         id: energy_page
@@ -1584,7 +1639,7 @@ lvgl:
                   id: nav_media_btn
                   styles: scene_btn
                   width: 100%
-                  height: 84
+                  height: 75
                   on_click:
                     - lvgl.page.show:
                         id: entertainment_page
@@ -1596,7 +1651,7 @@ lvgl:
                   id: nav_intercom_btn
                   styles: scene_btn
                   width: 100%
-                  height: 84
+                  height: 75
                   on_click:
                     - lvgl.page.show:
                         id: intercom_page
@@ -1608,7 +1663,7 @@ lvgl:
                   id: nav_settings_btn
                   styles: scene_btn
                   width: 100%
-                  height: 84
+                  height: 75
                   on_click:
                     - lvgl.page.show:
                         id: settings_p4_page
@@ -1641,31 +1696,74 @@ lvgl:
                   bg_grad_color: 0x40609A
                   bg_grad_dir: VER
                   border_width: 0
+                  # Card about 480x384. Top: time and "Fri, 30 Oct". Bottom,
+                  # under a divider: the next three calendar events side by
+                  # side, 144 px columns 152 px apart, one-line titles
+                  # (clock_events_draw).
                   widgets:
                     - label:
                         id: clock_time_label
-                        align: CENTER
-                        y: -14
+                        align: TOP_MID
+                        y: 12
                         text: "--:--"
                         text_font: font_clock_big
                         text_color: 0xFFFFFF
-                    # Bottom row: day on the left, date (no year) on the right
-                    - label:
-                        id: clock_day_label
-                        align: BOTTOM_LEFT
-                        x: 24
-                        y: -20
-                        text: ""
-                        text_font: font_ui_medium
-                        text_color: 0xFFFFFF
                     - label:
                         id: clock_date_label
-                        align: BOTTOM_RIGHT
-                        x: -24
-                        y: -20
+                        align: TOP_MID
+                        y: 196
                         text: ""
                         text_font: font_ui_medium
-                        text_color: 0xD0D9EA
+                        text_color: 0x9DB4FF
+                    - obj:
+                        x: 16
+                        y: 298
+                        width: 448
+                        height: 1
+                        border_width: 0
+                        bg_color: 0xFFFFFF
+                        bg_opa: 12%
+                    - label:
+                        id: clock_ev_none
+                        hidden: true
+                        align: TOP_MID
+                        y: 326
+                        text: "No upcoming events"
+                        text_font: font_small_18
+                        text_color: 0x8FA3D0
+                    - obj:
+                        id: clock_ev0
+                        styles: clock_ev_row
+                        x: 16
+                        y: 314
+                        hidden: true
+                        scrollable: false
+                        widgets:
+                          - obj: {id: clock_ev0_bar, styles: clock_ev_bar, x: 0, y: 2}
+                          - label: {id: clock_ev0_time, x: 12, y: 0, width: 132, long_mode: DOT, text: "", text_font: font_small, text_color: 0x8FA3D0}
+                          - label: {id: clock_ev0_title, x: 12, y: 22, width: 132, height: 26, long_mode: DOT, text: "", text_font: font_body_20, text_color: 0xFFFFFF}
+                    - obj:
+                        id: clock_ev1
+                        styles: clock_ev_row
+                        x: 168
+                        y: 314
+                        hidden: true
+                        scrollable: false
+                        widgets:
+                          - obj: {id: clock_ev1_bar, styles: clock_ev_bar, x: 0, y: 2}
+                          - label: {id: clock_ev1_time, x: 12, y: 0, width: 132, long_mode: DOT, text: "", text_font: font_small, text_color: 0x8FA3D0}
+                          - label: {id: clock_ev1_title, x: 12, y: 22, width: 132, height: 26, long_mode: DOT, text: "", text_font: font_body_20, text_color: 0xFFFFFF}
+                    - obj:
+                        id: clock_ev2
+                        styles: clock_ev_row
+                        x: 320
+                        y: 314
+                        hidden: true
+                        scrollable: false
+                        widgets:
+                          - obj: {id: clock_ev2_bar, styles: clock_ev_bar, x: 0, y: 2}
+                          - label: {id: clock_ev2_time, x: 12, y: 0, width: 132, long_mode: DOT, text: "", text_font: font_small, text_color: 0x8FA3D0}
+                          - label: {id: clock_ev2_title, x: 12, y: 22, width: 132, height: 26, long_mode: DOT, text: "", text_font: font_body_20, text_color: 0xFFFFFF}
 
         # =====================================================================
         # 2. GAS HEATER (card about 677x384)       col 6 span 7 | row 1
@@ -2829,13 +2927,11 @@ lvgl:
             text_color: 0xA7B2C4
     # ==================================================================
     # SECURITY: a 4 x 3 grid of cards below the header. For now only the
-    # two door locks and the garage roller door, in the top row.
+    # two door lock statuses and the garage roller door, in the top row.
     # ==================================================================
     - id: security_page
       bg_color: 0x0B1018
       scrollable: false
-      on_load:
-        - lvgl.widget.hide: security_confirm
       on_swipe_right:
         - lvgl.page.show:
             id: home_page
@@ -2911,40 +3007,6 @@ lvgl:
                               text: "--"
                               text_font: font_title
                               text_color: 0xFFFFFF
-                          - button:
-                              id: front_lock_btn
-                              styles: round_btn
-                              align: BOTTOM_RIGHT
-                              x: -16
-                              y: -16
-                              width: 64
-                              height: 64
-                              bg_color: 0x713F46          # unlocked
-                              checked:
-                                bg_color: 0x276B57        # locked
-                              on_click:
-                                - if:
-                                    condition:
-                                      text_sensor.state:
-                                        id: front_lock_state
-                                        state: "locked"
-                                    then:
-                                      - script.execute:
-                                          id: security_confirm_show
-                                          action: 1
-                                          question: "Unlock the front door?"
-                                    else:
-                                      - homeassistant.action:
-                                          action: lock.lock
-                                          data:
-                                            entity_id: ${front_lock_entity}
-                              widgets:
-                                - label:
-                                    id: front_lock_icon       # locked / unlocked icon
-                                    align: CENTER
-                                    text: "\U000F033E"
-                                    text_font: font_mdi_36
-                                    text_color: 0xFFFFFF
               # ---- Garage Door lock (col 2, row 1) ----
               - obj:
                   styles: cell_style
@@ -2976,41 +3038,6 @@ lvgl:
                               text: "--"
                               text_font: font_title
                               text_color: 0xFFFFFF
-                          - button:
-                              id: garage_lock_btn
-                              styles: round_btn
-                              align: BOTTOM_RIGHT
-                              x: -16
-                              y: -16
-                              width: 64
-                              height: 64
-                              bg_color: 0x713F46          # unlocked
-                              checked:
-                                bg_color: 0x276B57        # locked
-                              on_click:
-                                - if:
-                                    condition:
-                                      text_sensor.state:
-                                        id: garage_lock_state
-                                        state: "locked"
-                                    then:
-                                      - script.execute:
-                                          id: security_confirm_show
-                                          action: 2
-                                          question: "Unlock the garage door?"
-                                    else:
-                                      - homeassistant.action:
-                                          action: lock.lock
-                                          data:
-                                            entity_id: ${garage_lock_entity}
-                              widgets:
-                                - label:
-                                    id: garage_lock_icon       # locked / unlocked icon
-                                    align: CENTER
-                                    text: "\U000F033E"
-                                    text_font: font_mdi_36
-                                    text_color: 0xFFFFFF
-
               # =====================================================================
               # 3. GARAGE Roller DOOR                     col 9 span 2 | row 1 span 5
               # =====================================================================
@@ -3098,8 +3125,7 @@ lvgl:
                               text_color: 0xA7B2C4
                           # One button for the controller's next action (Up / Stop /
                           # Down), centred below the door; garage_update_button sets
-                          # its icon and colour. Up / Down ask for confirmation
-                          # first, Stop acts at once.
+                          # its icon and colour.
                           - button:
                               id: garage_btn
                               styles: round_btn
@@ -3109,18 +3135,7 @@ lvgl:
                               height: 48
                               bg_color: 0x527FD6
                               on_click:
-                                - if:
-                                    condition:
-                                      binary_sensor.is_on: garage_next_stop
-                                    then:
-                                      - script.execute: garage_press
-                                    else:
-                                      - script.execute:
-                                          id: security_confirm_show
-                                          action: 3
-                                          question: !lambda |-
-                                            return std::string(id(garage_next_down).state ? "Close the garage roller door?"
-                                                                                          : "Open the garage roller door?");
+                                - script.execute: garage_press
                               widgets:
                                 - label:
                                     id: garage_btn_icon
@@ -3128,72 +3143,6 @@ lvgl:
                                     text: "\U000F0737"
                                     text_font: font_mdi_24
                                     text_color: 0xFFFFFF
-
-        # Confirmation for an unlock or a roller door move: dims the page and
-        # blocks taps behind it. security_confirm_show sets the question and
-        # the pending action; Confirm runs it (security_confirm_run).
-        # Declared last so it sits on top of the cards.
-        - obj:
-            id: security_confirm
-            align: CENTER
-            width: 1280
-            height: 800
-            radius: 0
-            border_width: 0
-            bg_color: 0x000000
-            bg_opa: 70%
-            clickable: true
-            scrollable: false
-            hidden: true
-            widgets:
-              - obj:
-                  align: CENTER
-                  width: 520
-                  height: 240
-                  radius: 14
-                  bg_color: 0x151D2B
-                  border_color: 0x2A3546
-                  border_width: 1
-                  scrollable: false
-                  widgets:
-                    - label:
-                        id: security_confirm_label
-                        align: TOP_MID
-                        y: 40
-                        width: 460
-                        text: ""
-                        text_align: CENTER
-                        text_font: font_ui_medium
-                        text_color: 0xFFFFFF
-                    - button:
-                        align: BOTTOM_LEFT
-                        x: 30
-                        y: -24
-                        width: 200
-                        height: 56
-                        radius: 12
-                        border_width: 0
-                        shadow_width: 0
-                        bg_color: 0x202B3B
-                        on_click:
-                          - lvgl.widget.hide: security_confirm
-                        widgets:
-                          - label: {align: CENTER, text: "Cancel", text_font: font_body, text_color: 0xFFFFFF}
-                    - button:
-                        align: BOTTOM_RIGHT
-                        x: -30
-                        y: -24
-                        width: 200
-                        height: 56
-                        radius: 12
-                        border_width: 0
-                        shadow_width: 0
-                        bg_color: 0xD97706
-                        on_click:
-                          - lvgl.widget.hide: security_confirm
-                          - script.execute: security_confirm_run
-                        widgets:
-                          - label: {align: CENTER, text: "Confirm", text_font: font_body, text_color: 0xFFFFFF}
 
     # ==================================================================
     # ENERGY: electricity use (more cards can follow)
@@ -3852,11 +3801,155 @@ lvgl:
                                     bg_opa: TRANSP
                                     border_width: 0
                                     pad_all: 0
-                                    pad_row: 8
                                     text_font: font_body
                                     text_color: 0xFFFFFF
                                     scrollable: true
                                     scrollbar_mode: "active"
+
+    # ==================================================================
+    # CALENDAR: this month and next from the three HA calendars
+    # Same frame as the Energy page: "< Home" and the title. Left: one month
+    # grid per month (a dot per calendar for one-day events, a band along the
+    # bottom of each day for longer ones such as school terms). Right: the events from today, by
+    # day. The grids and the list are built by calendar_draw.
+    # ==================================================================
+    - id: calendar_page
+      bg_color: 0x0B1018
+      scrollable: false
+      on_load:
+        - script.execute: calendar_fetch
+      on_swipe_right:
+        - lvgl.page.show:
+            id: home_page
+            animation: MOVE_RIGHT
+            time: 250ms
+      widgets:
+        - button:
+            id: calendar_page_back_btn
+            styles: scene_btn
+            x: 16
+            y: 14
+            width: 120
+            height: 48
+            on_click:
+              - lvgl.page.show:
+                  id: home_page
+                  animation: MOVE_RIGHT
+                  time: 250ms
+            widgets:
+              - label: {align: CENTER, text: "<  Home", text_font: font_body, text_color: 0xFFFFFF}
+        - label:
+            align: TOP_MID
+            y: 22
+            text: "Calendar"
+            text_font: font_ui_medium
+            text_color: 0xFFFFFF
+
+        # This month (top) and next month (bottom): a 24 px weekday row and
+        # up to 6 weeks of 76 x 46 px days, Monday first.
+        - obj:
+            styles: card_style
+            x: 16
+            y: 72
+            width: 560
+            height: 356
+            scrollable: false
+            widgets:
+              - label:
+                  id: cal_title_0
+                  x: 20
+                  y: 12
+                  text: ""
+                  text_font: font_ui_medium
+                  text_color: 0xFFFFFF
+              - obj:
+                  id: cal_grid_0
+                  x: 14
+                  y: 48
+                  width: 532
+                  height: 300
+                  bg_opa: TRANSP
+                  border_width: 0
+                  pad_all: 0
+                  scrollable: false
+                  text_font: font_small_18
+        - obj:
+            styles: card_style
+            x: 16
+            y: 436
+            width: 560
+            height: 356
+            scrollable: false
+            widgets:
+              - label:
+                  id: cal_title_1
+                  x: 20
+                  y: 12
+                  text: ""
+                  text_font: font_ui_medium
+                  text_color: 0xFFFFFF
+              - obj:
+                  id: cal_grid_1
+                  x: 14
+                  y: 48
+                  width: 532
+                  height: 300
+                  bg_opa: TRANSP
+                  border_width: 0
+                  pad_all: 0
+                  scrollable: false
+                  text_font: font_small_18
+
+        # Upcoming events, with the calendar colours (as in calendar_draw).
+        - obj:
+            styles: card_style
+            x: 592
+            y: 72
+            width: 672
+            height: 720
+            scrollable: false
+            widgets:
+              - label:
+                  x: 20
+                  y: 12
+                  text: "Upcoming"
+                  text_font: font_ui_medium
+                  text_color: 0xFFFFFF
+              - obj:
+                  align: TOP_RIGHT
+                  x: -20
+                  y: 16
+                  width: SIZE_CONTENT
+                  height: SIZE_CONTENT
+                  bg_opa: TRANSP
+                  border_width: 0
+                  pad_all: 0
+                  scrollable: false
+                  layout:
+                    type: flex
+                    flex_flow: ROW
+                    flex_align_cross: CENTER
+                    pad_column: 8
+                  widgets:
+                    - obj: {width: 12, height: 12, radius: 6, border_width: 0, bg_color: 0x4CAF50}
+                    - label: {text: "${calendar_bins_name}   ", text_font: font_small_18, text_color: 0xC9D2DE}
+                    - obj: {width: 12, height: 12, radius: 6, border_width: 0, bg_color: 0x5A87FA}
+                    - label: {text: "${calendar_personal_name}   ", text_font: font_small_18, text_color: 0xC9D2DE}
+                    - obj: {width: 12, height: 12, radius: 6, border_width: 0, bg_color: 0xE48629}
+                    - label: {text: "${calendar_school_name}", text_font: font_small_18, text_color: 0xC9D2DE}
+              - obj:
+                  id: cal_event_list
+                  x: 12
+                  y: 56
+                  width: 648
+                  height: 652
+                  bg_opa: TRANSP
+                  border_width: 0
+                  pad_all: 0
+                  text_font: font_body
+                  text_color: 0xFFFFFF
+                  scrollable: true
+                  scrollbar_mode: "active"
 
     # ==================================================================
     # INTERCOM: the VoIP intercom card; shown automatically when a call comes in
@@ -4924,8 +5017,8 @@ lvgl:
             widgets:
               - label: {align: CENTER, text: "Reboot", text_font: font_body, text_color: 0xFFFFFF}
 
-        # Bottom right: why the panel last restarted, and uptime as HH:MM:SS.
-        # Filled by update_settings_info (on page load, then every second).
+        # Bottom right: why the panel last restarted, and uptime in minutes.
+        # Filled by update_settings_info (on page load, then every 3 s).
         - label:
             id: settings_reset_reason_label
             align: BOTTOM_RIGHT
@@ -5184,12 +5277,17 @@ globals:
     type: std::vector<std::string>
     restore_value: false
 
-  # Security page action waiting for Confirm: 1 unlock front door, 2 unlock
-  # garage door, 3 roller door button (0 = none).
-  - id: security_confirm_action
-    type: int
+  # Calendar page events, from calendar_fetch: ({start day, start minute or
+  # -1 for all day, calendar 0-2, end day (exclusive), end minute}, title).
+  # Days count from 1970-01-01, in local time.
+  - id: cal_events
+    type: std::vector<std::pair<std::array<int, 5>, std::string>>
     restore_value: false
-    initial_value: "0"
+
+  # The ?start=&end= part of the calendar requests.
+  - id: cal_query
+    type: std::string
+    restore_value: false
 
   # Heating and Cooling timers, set in heater_sched_popup and used when the
   # power button starts the selected mode; each is kept until it fires.
@@ -5482,6 +5580,7 @@ script:
                   lv_obj_clean(list);
                   lv_obj_set_flex_flow(list, LV_FLEX_FLOW_COLUMN);
                   lv_obj_set_flex_align(list, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_START);
+                  lv_obj_set_style_pad_row(list, 8, LV_PART_MAIN);  // set here: YAML takes pad_row only with a layout
                   for (const auto &entity : speakers) {
                     // "media_player.living_room_speaker_2" -> "Living room speaker 2"
                     std::string name = entity.substr(entity.find('.') + 1);
@@ -5540,7 +5639,319 @@ script:
                   entity_id: ${media_player_select_entity}
                   value: !lambda 'return id(media_speakers)[which];'
 
-  # Home page clock card: time (no seconds), day and date.
+  # Calendar page opened: read the events of the three calendars from HA's
+  # REST API (/api/calendars/<entity>), one request at a time, then draw.
+  - id: calendar_fetch
+    mode: single
+    then:
+      - if:
+          condition:
+            time.has_time:
+              id: my_time
+          then:
+            - lambda: |-
+                // From a few days before this month to just after next month
+                // (calendar_draw skips the extra days), so the range is safe
+                // whether HA reads these offset-less times as local or UTC.
+                const auto now = id(my_time).now();
+                int y = now.year, m = now.month - 1;
+                if (m < 1) { m = 12; y--; }
+                int end_y = now.year, end_m = now.month + 2;
+                if (end_m > 12) { end_m -= 12; end_y++; }
+                char query[80];
+                snprintf(query, sizeof(query), "?start=%04d-%02d-28T00:00:00&end=%04d-%02d-02T00:00:00",
+                         y, m, end_y, end_m);
+                id(cal_query) = query;
+                id(cal_events).clear();
+            - script.execute: {id: calendar_fetch_one, which: 0}
+            - script.wait: calendar_fetch_one
+            - script.execute: {id: calendar_fetch_one, which: 1}
+            - script.wait: calendar_fetch_one
+            - script.execute: {id: calendar_fetch_one, which: 2}
+            - script.wait: calendar_fetch_one
+            - script.execute: calendar_draw
+            - script.execute: clock_events_draw
+
+  # One calendar (0 bins, 1 personal, 2 school): add its events to cal_events.
+  - id: calendar_fetch_one
+    mode: queued
+    parameters:
+      which: int
+    then:
+      - http_request.get:
+          url: !lambda |-
+            static const char *const ENTITIES[] = {"${calendar_bins_entity}", "${calendar_personal_entity}",
+                                                   "${calendar_school_entity}"};
+            return std::string("${ha_base_url}/api/calendars/") + ENTITIES[which] + id(cal_query);
+          request_headers:
+            Authorization: "Bearer ${ha_token}"
+          capture_response: true
+          max_response_buffer_size: 32768
+          on_response:
+            then:
+              - lambda: |-
+                  if (response->status_code != 200) {
+                    ESP_LOGW("calendar", "HA returned HTTP %d for calendar %d", response->status_code, which);
+                    return;
+                  }
+                  JsonDocument filter;
+                  filter[0]["summary"] = true;
+                  filter[0]["start"] = true;
+                  filter[0]["end"] = true;
+                  JsonDocument doc;
+                  const auto err = deserializeJson(doc, body, DeserializationOption::Filter(filter));
+                  if (err) {
+                    ESP_LOGW("calendar", "Bad events JSON (%u bytes): %s", (unsigned) body.size(), err.c_str());
+                    return;
+                  }
+                  // Days since 1970-01-01 (as in media_poll).
+                  auto days = [](int y, int m, int d) {
+                    y -= m <= 2;
+                    const int era = y / 400, yoe = y - era * 400;
+                    const int doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+                    return era * 146097 + yoe * 365 + yoe / 4 - yoe / 100 + doy - 719468;
+                  };
+                  // {"dateTime": "2026-11-02T17:00:00+11:00"} (local time) or {"date": "2026-11-02"} (all day).
+                  auto parse = [&days](JsonObjectConst t, int &day, int &minute) {
+                    int y, m, d, h, mi;
+                    if (sscanf(t["dateTime"] | "", "%d-%d-%dT%d:%d", &y, &m, &d, &h, &mi) == 5) {
+                      day = days(y, m, d);
+                      minute = h * 60 + mi;
+                      return true;
+                    }
+                    if (sscanf(t["date"] | "", "%d-%d-%d", &y, &m, &d) == 3) {
+                      day = days(y, m, d);
+                      minute = -1;
+                      return true;
+                    }
+                    return false;
+                  };
+                  int count = 0;
+                  for (JsonObjectConst ev : doc.as<JsonArrayConst>()) {
+                    int start, start_min, end, end_min;
+                    if (!parse(ev["start"].as<JsonObjectConst>(), start, start_min) ||
+                        !parse(ev["end"].as<JsonObjectConst>(), end, end_min))
+                      continue;
+                    // Make the end day exclusive: an all-day end already is;
+                    // a timed one is unless it ends at midnight.
+                    if (start_min >= 0 && end_min > 0)
+                      end++;
+                    end = std::max(end, start + 1);
+                    id(cal_events).emplace_back(std::array<int, 5>{start, start_min, which, end, end_min},
+                                                std::string(ev["summary"] | "(No title)"));
+                    count++;
+                  }
+                  ESP_LOGD("calendar", "%d events from calendar %d", count, which);
+          on_error:
+            - logger.log:
+                level: WARN
+                tag: calendar
+                format: "Calendar %d request failed"
+                args: [which]
+
+  # Fill the two month grids and the upcoming list from cal_events.
+  - id: calendar_draw
+    then:
+      - lambda: |-
+          static const uint32_t COLOURS[] = {0x4CAF50, 0x5A87FA, 0xE48629};  // bins, personal, school (as the legend)
+          static const char *const MONTHS[] = {"January", "February", "March", "April", "May", "June", "July",
+                                               "August", "September", "October", "November", "December"};
+          static const char *const WEEKDAYS[] = {"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"};
+          // Days since 1970-01-01 and back (Howard Hinnant's civil date algorithms).
+          auto days = [](int y, int m, int d) {
+            y -= m <= 2;
+            const int era = y / 400, yoe = y - era * 400;
+            const int doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+            return era * 146097 + yoe * 365 + yoe / 4 - yoe / 100 + doy - 719468;
+          };
+          auto civil = [](int z, int &y, int &m, int &d) {
+            z += 719468;
+            const int era = z / 146097, doe = z - era * 146097;
+            const int yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+            const int doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+            const int mp = (5 * doy + 2) / 153;
+            d = doy - (153 * mp + 2) / 5 + 1;
+            m = mp < 10 ? mp + 3 : mp - 9;
+            y = yoe + era * 400 + (m <= 2);
+          };
+          // Day 0 (1970-01-01) was a Thursday: (day + 3) % 7 is 0 on Mondays.
+          auto day_name = [&civil](int day) {  // "Sat 31 Oct"
+            int y, m, d;
+            civil(day, y, m, d);
+            char text[16];
+            snprintf(text, sizeof(text), "%s %d %.3s", WEEKDAYS[(day + 3) % 7], d, MONTHS[m - 1]);
+            return std::string(text);
+          };
+          auto hm = [](int minute) {
+            char text[8];
+            snprintf(text, sizeof(text), "%02d:%02d", minute / 60, minute % 60);
+            return std::string(text);
+          };
+
+          const auto now = id(my_time).now();
+          const int today = days(now.year, now.month, now.day_of_month);
+          int first[3];  // the 1st of this month, next month and the month after
+          for (int i = 0, y = now.year, m = now.month; i < 3; i++) {
+            first[i] = days(y, m, 1);
+            if (++m > 12) { m = 1; y++; }
+          }
+
+          auto &events = id(cal_events);
+          std::sort(events.begin(), events.end());
+          // Per day of the two months, a bit per calendar: one-day events
+          // (dots) and longer ones (a band along the bottom of each day).
+          std::vector<uint8_t> dots(first[2] - first[0], 0), spans(first[2] - first[0], 0);
+          for (const auto &e : events) {
+            const auto &t = e.first;
+            if (t[3] - t[0] == 1) {
+              if (t[0] >= first[0] && t[0] < first[2])
+                dots[t[0] - first[0]] |= 1 << t[2];
+            } else {
+              for (int d = std::max(t[0], first[0]); d < std::min(t[3], first[2]); d++)
+                spans[d - first[0]] |= 1 << t[2];
+            }
+          }
+
+          lv_obj_t *titles[] = {id(cal_title_0), id(cal_title_1)};
+          lv_obj_t *grids[] = {id(cal_grid_0), id(cal_grid_1)};
+          for (int g = 0; g < 2; g++) {
+            int y, m, d;
+            civil(first[g], y, m, d);
+            lv_label_set_text_fmt(titles[g], "%s %d", MONTHS[m - 1], y);
+            lv_obj_t *grid = grids[g];
+            lv_obj_clean(grid);
+            for (int c = 0; c < 7; c++) {
+              lv_obj_t *label = lv_label_create(grid);
+              lv_label_set_text(label, WEEKDAYS[c]);
+              lv_obj_set_width(label, 76);
+              lv_obj_set_pos(label, c * 76, 0);
+              lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+              lv_obj_set_style_text_color(label, lv_color_hex(0x9AA7B8), LV_PART_MAIN);
+            }
+            const int lead = (first[g] + 3) % 7;
+            for (int day = first[g]; day < first[g + 1]; day++) {
+              const int i = day - first[g] + lead, k = day - first[0];
+              lv_obj_t *cell = lv_obj_create(grid);
+              lv_obj_remove_style_all(cell);  // plain box: no theme padding, border or scrolling
+              lv_obj_remove_flag(cell, LV_OBJ_FLAG_CLICKABLE);
+              lv_obj_set_size(cell, 72, 42);
+              lv_obj_set_pos(cell, i % 7 * 76 + 2, 24 + i / 7 * 46 + 2);
+              lv_obj_set_style_radius(cell, 8, LV_PART_MAIN);
+              lv_obj_set_style_bg_color(cell, lv_color_hex(0x202B3B), LV_PART_MAIN);
+              lv_obj_set_style_bg_opa(cell, LV_OPA_50, LV_PART_MAIN);
+              if (day == today) {
+                lv_obj_set_style_border_color(cell, lv_color_hex(0x8B9BFF), LV_PART_MAIN);
+                lv_obj_set_style_border_width(cell, 2, LV_PART_MAIN);
+              }
+              lv_obj_t *number = lv_label_create(cell);
+              lv_label_set_text_fmt(number, "%d", day - first[g] + 1);
+              lv_obj_align(number, LV_ALIGN_TOP_MID, 0, 2);
+              lv_obj_set_style_text_color(number, lv_color_hex(day < today ? 0x6B7A90 : 0xFFFFFF), LV_PART_MAIN);
+              const int total = __builtin_popcount(dots[k]);
+              for (int c = 0, n = 0; c < 3; c++) {
+                if (!(dots[k] & (1 << c)))
+                  continue;
+                lv_obj_t *dot = lv_obj_create(cell);
+                lv_obj_remove_style_all(dot);
+                lv_obj_set_size(dot, 8, 8);
+                lv_obj_set_style_radius(dot, LV_RADIUS_CIRCLE, LV_PART_MAIN);
+                lv_obj_set_style_bg_color(dot, lv_color_hex(COLOURS[c]), LV_PART_MAIN);
+                lv_obj_set_style_bg_opa(dot, LV_OPA_COVER, LV_PART_MAIN);
+                lv_obj_align(dot, LV_ALIGN_BOTTOM_MID, (n++ * 2 - (total - 1)) * 6, -12);
+              }
+              // Longer events: a 4 px band across the bottom, shared side by
+              // side when two calendars overlap.
+              const int bands = __builtin_popcount(spans[k]);
+              const int width = bands ? (64 - 4 * (bands - 1)) / bands : 0;
+              for (int c = 0, n = 0; c < 3; c++) {
+                if (!(spans[k] & (1 << c)))
+                  continue;
+                lv_obj_t *band = lv_obj_create(cell);
+                lv_obj_remove_style_all(band);
+                lv_obj_set_size(band, width, 4);
+                lv_obj_set_style_radius(band, 2, LV_PART_MAIN);
+                lv_obj_set_style_bg_color(band, lv_color_hex(COLOURS[c]), LV_PART_MAIN);
+                lv_obj_set_style_bg_opa(band, LV_OPA_COVER, LV_PART_MAIN);
+                lv_obj_align(band, LV_ALIGN_BOTTOM_LEFT, 4 + n++ * (width + 4), -4);
+              }
+            }
+          }
+
+          // Upcoming: each event under the day it starts (ongoing ones under
+          // today), to the end of next month.
+          std::vector<std::pair<int, size_t>> upcoming;  // (day shown under, index in events)
+          for (size_t i = 0; i < events.size(); i++) {
+            const auto &t = events[i].first;
+            if (t[3] > today && t[0] < first[2])
+              upcoming.emplace_back(std::max(t[0], today), i);
+          }
+          std::stable_sort(upcoming.begin(), upcoming.end(),
+                           [](const auto &a, const auto &b) { return a.first < b.first; });
+
+          lv_obj_t *list = id(cal_event_list);
+          lv_obj_clean(list);
+          lv_obj_set_flex_flow(list, LV_FLEX_FLOW_COLUMN);
+          lv_obj_set_flex_align(list, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+          lv_obj_set_style_pad_row(list, 6, LV_PART_MAIN);  // set here: YAML takes pad_row only with a layout
+          int shown_day = -1;
+          for (size_t r = 0; r < upcoming.size() && r < 60; r++) {
+            const auto &t = events[upcoming[r].second].first;
+            if (upcoming[r].first != shown_day) {
+              shown_day = upcoming[r].first;
+              std::string text = day_name(shown_day);
+              if (shown_day == today)
+                text = "Today, " + text;
+              else if (shown_day == today + 1)
+                text = "Tomorrow, " + text;
+              lv_obj_t *head = lv_label_create(list);
+              lv_label_set_text(head, text.c_str());
+              lv_obj_set_style_text_font(head, id(font_small_18)->get_lv_font(), LV_PART_MAIN);
+              lv_obj_set_style_text_color(head, lv_color_hex(0x9AA7B8), LV_PART_MAIN);
+              lv_obj_set_style_pad_top(head, r == 0 ? 0 : 8, LV_PART_MAIN);
+            }
+            std::string when;
+            const int last_day = t[4] == 0 ? t[3] : t[3] - 1;  // the day it ends on
+            if (t[1] < 0)
+              when = t[3] - t[0] == 1 ? "All day"
+                                      : std::string(t[0] < today ? "Until " : "All day, until ") + day_name(t[3] - 1);
+            else if (t[3] - t[0] == 1)
+              when = hm(t[1]) + " - " + hm(t[4]);
+            else
+              when = (t[0] < today ? std::string("Until ") : hm(t[1]) + " - ") + day_name(last_day) + " " + hm(t[4]);
+
+            lv_obj_t *row = lv_obj_create(list);
+            lv_obj_remove_style_all(row);
+            lv_obj_remove_flag(row, LV_OBJ_FLAG_CLICKABLE);
+            lv_obj_set_size(row, lv_pct(100), 64);
+            lv_obj_set_style_radius(row, 10, LV_PART_MAIN);
+            lv_obj_set_style_bg_color(row, lv_color_hex(0x202B3B), LV_PART_MAIN);
+            lv_obj_set_style_bg_opa(row, LV_OPA_70, LV_PART_MAIN);
+            lv_obj_t *bar = lv_obj_create(row);
+            lv_obj_remove_style_all(bar);
+            lv_obj_set_size(bar, 6, 48);
+            lv_obj_set_pos(bar, 8, 8);
+            lv_obj_set_style_radius(bar, 3, LV_PART_MAIN);
+            lv_obj_set_style_bg_color(bar, lv_color_hex(COLOURS[t[2]]), LV_PART_MAIN);
+            lv_obj_set_style_bg_opa(bar, LV_OPA_COVER, LV_PART_MAIN);
+            lv_obj_t *title = lv_label_create(row);
+            lv_label_set_text(title, events[upcoming[r].second].second.c_str());
+            lv_label_set_long_mode(title, LV_LABEL_LONG_DOT);
+            lv_obj_set_width(title, 600);
+            lv_obj_set_pos(title, 26, 6);
+            lv_obj_t *when_label = lv_label_create(row);
+            lv_label_set_text(when_label, when.c_str());
+            lv_obj_set_pos(when_label, 26, 36);
+            lv_obj_set_style_text_font(when_label, id(font_small)->get_lv_font(), LV_PART_MAIN);
+            lv_obj_set_style_text_color(when_label, lv_color_hex(0x9AA7B8), LV_PART_MAIN);
+          }
+          if (upcoming.empty()) {
+            lv_obj_t *label = lv_label_create(list);
+            lv_label_set_text(label, "Nothing on until the end of next month");
+            lv_obj_set_style_text_color(label, lv_color_hex(0x9AA7B8), LV_PART_MAIN);
+          }
+
+  # Home page clock card: time (no seconds), "Fri, 30 Oct", and the next
+  # events (finished ones drop off as the time passes).
   - id: update_clock
     then:
       - if:
@@ -5552,11 +5963,93 @@ script:
                 id: clock_time_label
                 text: !lambda 'return id(my_time).now().strftime("%H:%M");'
             - lvgl.label.update:
-                id: clock_day_label
-                text: !lambda 'return id(my_time).now().strftime("%A");'
-            - lvgl.label.update:
                 id: clock_date_label
-                text: !lambda 'return id(my_time).now().strftime("%d %B");'
+                text: !lambda |-
+                  auto now = id(my_time).now();  // not const: ESPTime::strftime is non-const
+                  return now.strftime("%a, ") + std::to_string(now.day_of_month) + now.strftime(" %b");
+            - script.execute: clock_events_draw
+
+  # Clock card: the next three events from cal_events (from calendar_fetch):
+  # starting today or later, and not already over. Ongoing multi-day events
+  # (such as the school term) are left out.
+  - id: clock_events_draw
+    then:
+      - lambda: |-
+          static const uint32_t COLOURS[] = {0x4CAF50, 0x5A87FA, 0xE48629};  // as calendar_draw
+          static const char *const MONTHS[] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                                               "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
+          static const char *const WEEKDAYS[] = {"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"};
+          // Days since 1970-01-01 and back (as in calendar_draw).
+          auto days = [](int y, int m, int d) {
+            y -= m <= 2;
+            const int era = y / 400, yoe = y - era * 400;
+            const int doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+            return era * 146097 + yoe * 365 + yoe / 4 - yoe / 100 + doy - 719468;
+          };
+          auto civil = [](int z, int &y, int &m, int &d) {
+            z += 719468;
+            const int era = z / 146097, doe = z - era * 146097;
+            const int yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+            const int doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+            const int mp = (5 * doy + 2) / 153;
+            d = doy - (153 * mp + 2) / 5 + 1;
+            m = mp < 10 ? mp + 3 : mp - 9;
+            y = yoe + era * 400 + (m <= 2);
+          };
+          auto hm = [](int minute) {
+            char text[8];
+            snprintf(text, sizeof(text), "%02d:%02d", minute / 60, minute % 60);
+            return std::string(text);
+          };
+          const auto now = id(my_time).now();
+          if (!now.is_valid())
+            return;
+          const int today = days(now.year, now.month, now.day_of_month);
+          const int minute = now.hour * 60 + now.minute;
+
+          lv_obj_t *rows[] = {id(clock_ev0), id(clock_ev1), id(clock_ev2)};
+          lv_obj_t *bars[] = {id(clock_ev0_bar), id(clock_ev1_bar), id(clock_ev2_bar)};
+          lv_obj_t *times[] = {id(clock_ev0_time), id(clock_ev1_time), id(clock_ev2_time)};
+          lv_obj_t *titles[] = {id(clock_ev0_title), id(clock_ev1_title), id(clock_ev2_title)};
+          auto &events = id(cal_events);
+          std::sort(events.begin(), events.end());
+          int shown = 0;
+          for (const auto &e : events) {
+            if (shown == 3)
+              break;
+            const auto &t = e.first;
+            if (t[0] < today || (t[1] >= 0 && t[3] - t[0] == 1 && t[0] == today && t[4] <= minute))
+              continue;
+            // Short enough for a 132 px column: "13:00 - 14:00" or "All day"
+            // today, "Tomorrow 18:00", "Tue 3 Nov 18:00", "Tue 3 Nov" (all day).
+            std::string when;
+            if (t[0] == today) {
+              when = t[1] < 0 ? "All day" : hm(t[1]) + " - " + hm(t[4]);
+            } else {
+              if (t[0] == today + 1) {
+                when = "Tomorrow";
+              } else {
+                int y, m, d;
+                civil(t[0], y, m, d);
+                char text[16];
+                snprintf(text, sizeof(text), "%s %d %s", WEEKDAYS[(t[0] + 3) % 7], d, MONTHS[m - 1]);
+                when = text;
+              }
+              if (t[1] >= 0)
+                when += " " + hm(t[1]);
+            }
+            lv_obj_set_style_bg_color(bars[shown], lv_color_hex(COLOURS[t[2]]), LV_PART_MAIN);
+            lv_label_set_text(times[shown], when.c_str());
+            lv_label_set_text(titles[shown], e.second.c_str());
+            lv_obj_remove_flag(rows[shown], LV_OBJ_FLAG_HIDDEN);
+            shown++;
+          }
+          for (int i = shown; i < 3; i++)
+            lv_obj_add_flag(rows[i], LV_OBJ_FLAG_HIDDEN);
+          if (shown == 0)
+            lv_obj_remove_flag(id(clock_ev_none), LV_OBJ_FLAG_HIDDEN);
+          else
+            lv_obj_add_flag(id(clock_ev_none), LV_OBJ_FLAG_HIDDEN);
 
   # Download the latest Frigate snapshot through HA's image proxy. The short
   # delay lets the new entity_picture token arrive with the new state.
@@ -6200,8 +6693,8 @@ script:
 #          state:
 #            checked: !lambda 'return id(agc_switch).state;'
 
-  # Settings page, bottom right: last reset reason and uptime (HH:MM:SS; the
-  # hours keep counting past 24). millis_64() does not wrap after 49 days.
+  # Settings page, bottom right: last reset reason and uptime (whole minutes,
+  # rounded up). millis_64() does not wrap after 49 days.
   - id: update_settings_info
     then:
       - lambda: |-
@@ -6223,9 +6716,20 @@ script:
           snprintf(text, sizeof(text), "Last restart: %s", reason);
           lv_label_set_text(id(settings_reset_reason_label), text);
 
+          // "Uptime < 1 min", then whole minutes rounded up: "Uptime 3d 4h 12m".
           const uint64_t s = millis_64() / 1000;
-          snprintf(text, sizeof(text), "Uptime %02lu:%02u:%02u",
-                   (unsigned long) (s / 3600), (unsigned) (s / 60 % 60), (unsigned) (s % 60));
+          if (s < 60) {
+            snprintf(text, sizeof(text), "Uptime < 1 min");
+          } else {
+            const uint64_t m = (s + 59) / 60;
+            const unsigned d = m / 1440, h = m / 60 % 24, mi = m % 60;
+            if (d > 0)
+              snprintf(text, sizeof(text), "Uptime %ud %uh %um", d, h, mi);
+            else if (h > 0)
+              snprintf(text, sizeof(text), "Uptime %uh %um", h, mi);
+            else
+              snprintf(text, sizeof(text), "Uptime %um", mi);
+          }
           lv_label_set_text(id(settings_uptime_label), text);
 
   - id: update_ic_idle_labels
@@ -6675,48 +7179,6 @@ script:
               if (id(garage_next_down).state) return std::string("${garage_down_button}");
               return std::string("${garage_up_button}");
 
-  # Security page confirmation: show the question, remember the action.
-  - id: security_confirm_show
-    parameters:
-      action: int
-      question: string
-    then:
-      - globals.set:
-          id: security_confirm_action
-          value: !lambda 'return action;'
-      - lvgl.label.update:
-          id: security_confirm_label
-          text: !lambda 'return question;'
-      - lvgl.widget.show: security_confirm
-
-  # Confirm pressed: run the pending action.
-  - id: security_confirm_run
-    then:
-      - if:
-          condition:
-            lambda: return id(security_confirm_action) == 1;
-          then:
-            - homeassistant.action:
-                action: lock.unlock
-                data:
-                  entity_id: ${front_lock_entity}
-      - if:
-          condition:
-            lambda: return id(security_confirm_action) == 2;
-          then:
-            - homeassistant.action:
-                action: lock.unlock
-                data:
-                  entity_id: ${garage_lock_entity}
-      - if:
-          condition:
-            lambda: return id(security_confirm_action) == 3;
-          then:
-            - script.execute: garage_press
-      - globals.set:
-          id: security_confirm_action
-          value: "0"
-
   # Backlight: the chosen Screen Brightness on touch/activity, dimmed to 60 %
   # of it after the "Dim screen after" time, then 20 % of it 2 minutes later.
   - id: backlight_timer
@@ -6756,7 +7218,6 @@ script:
                   lambda: 'return id(phone).is_idle() && !id(home_page)->is_showing();'
                 then:
                   - lvgl.widget.hide: reboot_confirm
-                  - lvgl.widget.hide: security_confirm
                   - lvgl.page.show:
                       id: home_page
                       animation: FADE_IN
@@ -7265,13 +7726,6 @@ text_sensor:
     entity_id: ${front_lock_entity}
     internal: true
     on_value:
-      - lvgl.widget.update:
-          id: front_lock_btn
-          state:
-            checked: !lambda 'return x == "locked";'
-      - lvgl.label.update:
-          id: front_lock_icon
-          text: !lambda 'return std::string(x == "locked" ? "\U000F033E" : "\U000F033F");'
       # Security page: "Locked", "Unlocked", "Jammed"...
       - lvgl.label.update:
           id: front_lock_status_label
@@ -7285,13 +7739,6 @@ text_sensor:
     entity_id: ${garage_lock_entity}
     internal: true
     on_value:
-      - lvgl.widget.update:
-          id: garage_lock_btn
-          state:
-            checked: !lambda 'return x == "locked";'
-      - lvgl.label.update:
-          id: garage_lock_icon
-          text: !lambda 'return std::string(x == "locked" ? "\U000F033E" : "\U000F033F");'
       - lvgl.label.update:
           id: garage_lock_status_label
           text: !lambda |-
@@ -7301,9 +7748,15 @@ text_sensor:
 
 interval:
   # Lights card: re-sync the tiles with HA (catches a missed state update).
+  # Settings page: uptime in whole minutes, only while that page is shown.
   - interval: 3s
     then:
       - script.execute: light_tiles_check
+      - if:
+          condition:
+            lambda: return id(settings_p4_page)->is_showing();
+          then:
+            - script.execute: update_settings_info
 
   - interval: 1s
     then:
@@ -7331,21 +7784,16 @@ interval:
                 then:
                   - script.execute: media_poll
 
-       # Settings page uptime ticks every second, only while that page is shown.
-  
-      - if:
-          condition:
-            lambda: return id(settings_p4_page)->is_showing();
-          then:
-            - script.execute: update_settings_info
-
       # Heating and Cooling Delay on / Delay off timers.
       - script.execute: heater_sched_check
 
-  # Home page clock card. The clock shows no seconds, so every 45 s is
-  # enough (the minute flips up to 45 s late).
+  # Home page clock card. The clock shows no seconds, so every 45 s is enough
   - interval: 45s
     then:
       - script.execute: update_clock
       # Check the Wi-Fi signal every 45 s, too, so the status bar shows it promptly.
       - script.execute: update_status_bar
+
+  - interval: 20min
+    then:
+      - script.execute: calendar_fetch
