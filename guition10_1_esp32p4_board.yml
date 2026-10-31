@@ -1227,7 +1227,8 @@ lvgl:
       bg_grad_dir: VER
 
   # Heating and Cooling timer window, opened under the Delay on / Delay off
-  # buttons (heater_sched_popup_toggle places it). On the top layer so it can
+  # buttons down over the Scenes card (heater_sched_popup_toggle places and
+  # sizes it, and the buttons and rollers in it). On the top layer so it can
   # overlap the cards below the heater card. Rollers are hours and minutes:
   # a 24 h clock time ("Fixed time") or a duration ("Delay").
   top_layer:
@@ -1236,8 +1237,8 @@ lvgl:
           id: heater_sched_popup
           x: 897
           y: 308
-          width: 353
-          height: 270
+          width: 380
+          height: 430
           hidden: true
           radius: 14
           bg_color: 0x151D2B
@@ -1290,7 +1291,8 @@ lvgl:
                   - label: {align: CENTER, text: "Fixed time", text_font: font_small, text_color: 0xFFFFFF}
             - button:
                 id: heater_sched_type_delay_btn
-                x: 182
+                align: TOP_RIGHT
+                x: -16
                 y: 48
                 width: 155
                 height: 40
@@ -1309,8 +1311,9 @@ lvgl:
                   - label: {align: CENTER, text: "Delay", text_font: font_small, text_color: 0xFFFFFF}
             - roller:
                 id: heater_sched_hour_roller
-                x: 76
-                y: 98
+                align: TOP_MID
+                x: -55
+                y: 104
                 width: 90
                 visible_row_count: 3
                 mode: INFINITE
@@ -1325,7 +1328,8 @@ lvgl:
                 options: ["00", "01", "02", "03", "04", "05", "06", "07", "08", "09", "10", "11",
                           "12", "13", "14", "15", "16", "17", "18", "19", "20", "21", "22", "23"]
             - label:
-                x: 168
+                id: heater_sched_colon
+                align: TOP_MID
                 y: 136
                 width: 16
                 text: ":"
@@ -1334,8 +1338,9 @@ lvgl:
                 text_color: 0xFFFFFF
             - roller:
                 id: heater_sched_min_roller
-                x: 186
-                y: 98
+                align: TOP_MID
+                x: 55
+                y: 104
                 width: 90
                 visible_row_count: 3
                 mode: INFINITE
@@ -1356,11 +1361,12 @@ lvgl:
             # Clear removes this timer, Start saves it; both apply to a
             # running one straight away (heater_sched_arm).
             - button:
+                id: heater_sched_clear_btn
                 align: BOTTOM_LEFT
                 x: 16
-                y: -14
+                y: -16
                 width: 155
-                height: 44
+                height: 48
                 radius: 10
                 bg_color: 0x202B3B
                 border_width: 0
@@ -1374,11 +1380,12 @@ lvgl:
                 widgets:
                   - label: {align: CENTER, text: "Clear", text_font: font_body, text_color: 0xFFFFFF}
             - button:
+                id: heater_sched_start_btn
                 align: BOTTOM_RIGHT
                 x: -16
-                y: -14
+                y: -16
                 width: 155
-                height: 44
+                height: 48
                 radius: 10
                 bg_color: 0x43A982
                 border_width: 0
@@ -2103,6 +2110,7 @@ lvgl:
                               x: 124
                               width: 215
                               text: "No timer"
+                              text_align: RIGHT   # on / off times line up
                               text_font: font_small
                               text_color: 0x9DB4FF
                               long_mode: WRAP
@@ -3610,7 +3618,7 @@ lvgl:
                                     then:
                                       - lvgl.widget.hide: media_speaker_picker
                                     else:
-                                      - script.execute: media_speakers_fetch
+                                      - script.execute: media_speakers_show
                               widgets:
                                 - label: {align: CENTER, text: "\U000F0D38", text_font: font_mdi_36, text_color: 0x9DB4FF}
                           # Controls, centred under the progress bar.
@@ -3750,7 +3758,7 @@ lvgl:
                                               return std::string(buf);
                           # Speaker picker over the album art: one row per
                           # ${media_speaker_select_entity} option, built by
-                          # media_speakers_fetch (the current player highlighted).
+                          # media_speakers_show (the current player highlighted).
                           # Declared last so it sits on top of the card.
                           - obj:
                               id: media_speaker_picker
@@ -3790,7 +3798,7 @@ lvgl:
                                       - label: {align: CENTER, text: "\U000F0156", text_font: font_mdi_24, text_color: 0xA7B2C4}
                                 # Rows inherit the font and colour from here.
                                 # Its rows are added at runtime, so the column
-                                # layout is set there too (media_speakers_fetch):
+                                # layout is set there too (media_speakers_show):
                                 # ESPHome only takes a layout with YAML widgets.
                                 - obj:
                                     id: media_speaker_list
@@ -5271,12 +5279,6 @@ globals:
     restore_value: false
     initial_value: "NAN"
 
-  # Media card speaker picker: the ${media_speaker_select_entity} options
-  # (media_player entity ids), in the order of the picker rows.
-  - id: media_speakers
-    type: std::vector<std::string>
-    restore_value: false
-
   # Calendar page events, from calendar_fetch: ({start day, start minute or
   # -1 for all day, calendar 0-2, end day (exclusive), end minute}, title).
   # Days count from 1970-01-01, in local time.
@@ -5540,85 +5542,53 @@ script:
             - delay: 1500ms
             - script.execute: media_poll
 
-  # Speaker button: read the ${media_speaker_select_entity} options from HA's
-  # REST API (after a running state poll, one request at a time), fill
-  # media_speaker_list with one row per speaker and show the picker.
-  - id: media_speakers_fetch
-    mode: single
+  # Speaker button: fill media_speaker_list with one row per
+  # media_speaker_select option (mirrored from ${media_speaker_select_entity})
+  # and show the picker.
+  - id: media_speakers_show
     then:
-      - wait_until:
-          condition:
-            lambda: return !id(media_poll).is_running();
-          timeout: 5s
-      - http_request.get:
-          url: "${ha_base_url}/api/states/${media_speaker_select_entity}"
-          request_headers:
-            Authorization: "Bearer ${ha_token}"
-          capture_response: true
-          max_response_buffer_size: 8192
-          on_response:
-            then:
-              - lambda: |-
-                  if (response->status_code != 200) {
-                    ESP_LOGW("media", "HA returned HTTP %d for ${media_speaker_select_entity}", response->status_code);
-                    return;
-                  }
-                  JsonDocument filter;
-                  filter["attributes"]["options"] = true;
-                  JsonDocument doc;
-                  const auto err = deserializeJson(doc, body, DeserializationOption::Filter(filter));
-                  if (err) {
-                    ESP_LOGW("media", "Bad speaker list JSON: %s", err.c_str());
-                    return;
-                  }
-                  auto &speakers = id(media_speakers);
-                  speakers.clear();
-                  for (JsonVariantConst v : doc["attributes"]["options"].as<JsonArrayConst>())
-                    speakers.push_back(v | "");
-
-                  lv_obj_t *list = id(media_speaker_list);
-                  lv_obj_clean(list);
-                  lv_obj_set_flex_flow(list, LV_FLEX_FLOW_COLUMN);
-                  lv_obj_set_flex_align(list, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_START);
-                  lv_obj_set_style_pad_row(list, 8, LV_PART_MAIN);  // set here: YAML takes pad_row only with a layout
-                  for (const auto &entity : speakers) {
-                    // "media_player.living_room_speaker_2" -> "Living room speaker 2"
-                    std::string name = entity.substr(entity.find('.') + 1);
-                    for (auto &c : name) if (c == '_') c = ' ';
-                    if (!name.empty()) name[0] = toupper(name[0]);
-                    const bool current = entity == id(media_entity).state;
-                    lv_obj_t *row = lv_button_create(list);
-                    lv_obj_set_size(row, lv_pct(100), 60);
-                    lv_obj_set_style_radius(row, 10, LV_PART_MAIN);
-                    lv_obj_set_style_shadow_width(row, 0, LV_PART_MAIN);
-                    lv_obj_set_style_bg_color(row, lv_color_hex(current ? 0x4F5BD5 : 0x202B3B), LV_PART_MAIN);
-                    lv_obj_set_style_border_color(row, lv_color_hex(current ? 0x8B9BFF : 0x34445A), LV_PART_MAIN);
-                    lv_obj_set_style_border_width(row, 1, LV_PART_MAIN);
-                    lv_obj_t *label = lv_label_create(row);
-                    lv_label_set_text(label, name.c_str());
-                    lv_label_set_long_mode(label, LV_LABEL_LONG_DOT);
-                    lv_obj_set_width(label, lv_pct(100));
-                    lv_obj_align(label, LV_ALIGN_LEFT_MID, 8, 0);
-                    // Row index = position in media_speakers.
-                    lv_obj_add_event_cb(row, [](lv_event_t *e) {
-                      auto *target = static_cast<lv_obj_t *>(lv_event_get_current_target(e));
-                      id(media_speaker_pick).execute((int) lv_obj_get_index(target));
-                    }, LV_EVENT_CLICKED, nullptr);
-                  }
-                  if (speakers.empty()) {
-                    lv_obj_t *label = lv_label_create(list);
-                    lv_label_set_text(label, "No speakers in ${media_speaker_select_entity}");
-                  }
-              - lvgl.widget.show: media_speaker_picker
-          on_error:
-            - logger.log:
-                level: WARN
-                tag: media
-                format: "Speaker list request failed"
+      - lambda: |-
+          auto *speakers = id(media_speaker_select);
+          lv_obj_t *list = id(media_speaker_list);
+          lv_obj_clean(list);
+          lv_obj_set_flex_flow(list, LV_FLEX_FLOW_COLUMN);
+          lv_obj_set_flex_align(list, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_START);
+          lv_obj_set_style_pad_row(list, 8, LV_PART_MAIN);  // set here: YAML takes pad_row only with a layout
+          for (size_t i = 0; i < speakers->size(); i++) {
+            const std::string entity = speakers->option_at(i);
+            // "media_player.living_room_speaker_2" -> "Living room speaker 2"
+            std::string name = entity.substr(entity.find('.') + 1);
+            for (auto &c : name) if (c == '_') c = ' ';
+            if (!name.empty()) name[0] = toupper(name[0]);
+            const bool current = entity == id(media_entity).state;
+            lv_obj_t *row = lv_button_create(list);
+            lv_obj_set_size(row, lv_pct(100), 60);
+            lv_obj_set_style_radius(row, 10, LV_PART_MAIN);
+            lv_obj_set_style_shadow_width(row, 0, LV_PART_MAIN);
+            lv_obj_set_style_bg_color(row, lv_color_hex(current ? 0x4F5BD5 : 0x202B3B), LV_PART_MAIN);
+            lv_obj_set_style_border_color(row, lv_color_hex(current ? 0x8B9BFF : 0x34445A), LV_PART_MAIN);
+            lv_obj_set_style_border_width(row, 1, LV_PART_MAIN);
+            lv_obj_t *label = lv_label_create(row);
+            lv_label_set_text(label, name.c_str());
+            lv_label_set_long_mode(label, LV_LABEL_LONG_DOT);
+            lv_obj_set_width(label, lv_pct(100));
+            lv_obj_align(label, LV_ALIGN_LEFT_MID, 8, 0);
+            // Row index = option index in media_speaker_select.
+            lv_obj_add_event_cb(row, [](lv_event_t *e) {
+              auto *target = static_cast<lv_obj_t *>(lv_event_get_current_target(e));
+              id(media_speaker_pick).execute((int) lv_obj_get_index(target));
+            }, LV_EVENT_CLICKED, nullptr);
+          }
+          if (speakers->size() == 0) {
+            lv_obj_t *label = lv_label_create(list);
+            lv_label_set_text(label, "No speakers in ${media_speaker_select_entity}");
+          }
+      - lvgl.widget.show: media_speaker_picker
 
   # Speaker picked (row index): select it in ${media_speaker_select_entity}
-  # and write its entity id into ${media_player_select_entity}, which
-  # switches the card to that player (media_entity on_value).
+  # (media_speaker_select sends the select_option action) and write its
+  # entity id into ${media_player_select_entity}, which switches the card to
+  # that player (media_entity on_value).
   - id: media_speaker_pick
     parameters:
       which: int
@@ -5626,18 +5596,14 @@ script:
       - lvgl.widget.hide: media_speaker_picker
       - if:
           condition:
-            lambda: return which >= 0 && which < (int) id(media_speakers).size();
+            lambda: return which >= 0 && id(media_speaker_select).has_index(which);
           then:
-            - homeassistant.action:
-                action: input_select.select_option
-                data:
-                  entity_id: ${media_speaker_select_entity}
-                  option: !lambda 'return id(media_speakers)[which];'
+            - lambda: id(media_speaker_select).make_call().set_index(which).perform();
             - homeassistant.action:
                 action: input_text.set_value
                 data:
                   entity_id: ${media_player_select_entity}
-                  value: !lambda 'return id(media_speakers)[which];'
+                  value: !lambda 'return std::string(id(media_speaker_select).option_at(which));'
 
   # Calendar page opened: read the events of the three calendars from HA's
   # REST API (/api/calendars/<entity>), one request at a time, then draw.
@@ -7096,9 +7062,28 @@ script:
                 lv_roller_set_selected(id(heater_sched_hour_roller)->obj, h, LV_ANIM_OFF);
                 lv_roller_set_selected(id(heater_sched_min_roller)->obj, m, LV_ANIM_OFF);
                 lv_label_set_text(id(heater_sched_popup_title), which == 1 ? "Delay on" : "Delay off");
-                lv_area_t card;
+                // From under the timer card down to the bottom of the Scenes
+                // card, as wide as both.
+                lv_area_t card, scenes;
                 lv_obj_get_coords(id(heater_sched_card), &card);
-                lv_obj_set_pos(id(heater_sched_popup), card.x1, card.y2 + 8);
+                lv_obj_get_coords(id(card_scenes), &scenes);
+                const int x1 = (int) std::min(card.x1, scenes.x1), x2 = (int) std::max(card.x2, scenes.x2);
+                const int y1 = (int) card.y2 + 8;
+                const int pop_w = x2 - x1 + 1, pop_h = std::max(330, (int) scenes.y2 - y1 + 1);
+                lv_obj_set_pos(id(heater_sched_popup), x1, y1);
+                lv_obj_set_size(id(heater_sched_popup), pop_w, pop_h);
+                // Two buttons a row: 16 px margins, 12 px apart.
+                lv_obj_t *const buttons[] = {id(heater_sched_type_time_btn), id(heater_sched_type_delay_btn),
+                                             id(heater_sched_clear_btn), id(heater_sched_start_btn)};
+                for (lv_obj_t *b : buttons) lv_obj_set_width(b, (pop_w - 2 * 16 - 12) / 2);
+                // Rollers (y 104) fill the height down to 24 px above Clear /
+                // Start (48 high, 16 px from the bottom); the ":" sits mid-way.
+                const int roller_h = pop_h - 104 - 24 - 48 - 16;
+                lv_obj_set_height(id(heater_sched_hour_roller)->obj, roller_h);
+                lv_obj_set_height(id(heater_sched_min_roller)->obj, roller_h);
+                lv_obj_t *colon = id(heater_sched_colon);
+                const int line_h = lv_font_get_line_height(lv_obj_get_style_text_font(colon, LV_PART_MAIN));
+                lv_obj_set_y(colon, 104 + (roller_h - line_h) / 2);
             - script.execute: heater_sched_popup_draw_type
             - lvgl.widget.show: heater_sched_popup
 
@@ -7425,6 +7410,15 @@ select:
     restore_value: true
     on_value:
       - script.execute: home_return_timer
+  # Media card speaker picker: mirrors the options (media_player entity ids)
+  # and state of ${media_speaker_select_entity}. Internal, as HA already has
+  # the input_select. Room for 32 options / 1 KB of entity ids.
+  - platform: homeassistant
+    id: media_speaker_select
+    entity_id: ${media_speaker_select_entity}
+    internal: true
+    max_options: 32
+    options_buffer_size: 1024
 
 number:
   - platform: template
@@ -7777,7 +7771,7 @@ interval:
                     if (id(media_duration) <= 0 || id(media_pos_at) <= 0 || !now.is_valid()) return false;
                     if (id(media_pos) + (now.timestamp - id(media_pos_at)) < id(media_duration) + 1) return false;
                     if (id(media_poll).is_running() || id(media_command).is_running() ||
-                        id(media_fetch_art).is_running() || id(media_speakers_fetch).is_running() ||
+                        id(media_fetch_art).is_running() ||
                         millis() - last_poll < 5000) return false;
                     last_poll = millis();
                     return true;
