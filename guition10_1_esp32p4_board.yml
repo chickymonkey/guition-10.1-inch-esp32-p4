@@ -838,7 +838,7 @@ font:
       weight: 600
     id: font_clock_big
     bpp: 4             # anti-aliased (default 1 bpp is jagged)
-    size: 150          # clock card, above the event row
+    size: 170          # clock card, above the event row
     glyphs: "0123456789:-"
 
   # Gas heater card: current and target temperature (digits and degree only).
@@ -1718,14 +1718,14 @@ lvgl:
                     - label:
                         id: clock_time_label
                         align: TOP_MID
-                        y: 12
+                        y: 32
                         text: "--:--"
                         text_font: font_clock_big
                         text_color: 0xFFFFFF
                     - label:
                         id: clock_date_label
                         align: TOP_MID
-                        y: 196
+                        y: 256
                         text: ""
                         text_font: font_ui_medium
                         text_color: 0x9DB4FF
