@@ -422,6 +422,26 @@ time:
         hours: 0
         then:
           - script.execute: fetch_soil_history
+      # Night backlight (backlight_idle) starts at 00:30 and ends at 06:00;
+      # an idle screen changes level now, an active one when it next idles.
+      - seconds: 0
+        minutes: 30
+        hours: 0
+        then:
+          - if:
+              condition:
+                lambda: return !id(backlight_timer).is_running();
+              then:
+                - script.execute: backlight_idle
+      - seconds: 0
+        minutes: 0
+        hours: 6
+        then:
+          - if:
+              condition:
+                lambda: return !id(backlight_timer).is_running();
+              then:
+                - script.execute: backlight_idle
 
 # =======BUSES AND CAMERA======================================================
 
@@ -7217,7 +7237,8 @@ script:
               return std::string("${garage_up_button}");
 
   # Backlight: the chosen Screen Brightness on touch/activity, dimmed to 60 %
-  # of it after the "Dim screen after" time, then 20 % of it 2 minutes later.
+  # of it after the "Dim screen after" time, then to the idle level 2 minutes
+  # later (backlight_idle).
   - id: backlight_timer
     mode: restart
     then:
@@ -7232,9 +7253,21 @@ script:
           id: backlight_pwm
           level: !lambda 'return id(screen_brightness).state * 0.6f / 100.0f;'
       - delay: 120s
+      - script.execute: backlight_idle
+
+  # Idle backlight: 20 % of Screen Brightness (at least 5 %); from 00:30 to
+  # 06:00 at most 10 %. Also run at 00:30 and 06:00 (my_time) if the screen
+  # is already idle.
+  - id: backlight_idle
+    then:
       - output.set_level:
           id: backlight_pwm
-          level: !lambda 'return std::max(0.05f, id(screen_brightness).state * 0.2f / 100.0f);'
+          level: !lambda |-
+            const float level = std::max(0.05f, id(screen_brightness).state * 0.2f / 100.0f);
+            const auto now = id(my_time).now();
+            const int minute = now.hour * 60 + now.minute;
+            const bool night = now.is_valid() && minute >= 30 && minute < 360;
+            return night ? std::min(level, 0.10f) : level;
 
   # Return to the home page after the "Return to home after" time with no
   # touch. Restarted by every touch; does nothing when set to Off or while a
