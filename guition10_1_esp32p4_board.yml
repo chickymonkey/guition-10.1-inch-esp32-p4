@@ -1710,10 +1710,7 @@ lvgl:
                   bg_grad_color: 0x40609A
                   bg_grad_dir: VER
                   border_width: 0
-                  # Card about 480x384. Top: time and "Fri, 30 Oct". Bottom,
-                  # under a divider: the next three calendar events side by
-                  # side, 144 px columns 152 px apart, one-line titles
-                  # (clock_events_draw).
+                
                   widgets:
                     - label:
                         id: clock_time_label
@@ -3435,8 +3432,6 @@ lvgl:
               # its state from HA when this page opens, after a button press and
               # at the end of a track; media_draw / media_tick fill the widgets
               # and count the progress locally in between.
-              # Top to bottom: 360 px album art, title, artist, progress bar with
-              # times, prev / play / next, volume.
               # =====================================================================
               - obj:
                   styles: cell_style
@@ -3631,7 +3626,7 @@ lvgl:
                               widgets:
                                 - label: {align: CENTER, text: "\U000F0D38", text_font: font_mdi_36, text_color: 0x9DB4FF}
                           # Controls, centred under the progress bar.
-                          - button:
+                          - button: # Previous track button
                               id: media_prev_btn
                               styles: round_btn
                               align: TOP_MID
@@ -3649,7 +3644,7 @@ lvgl:
                               widgets:
                                 - label: {align: CENTER, text: "\U000F04AE", text_font: font_mdi_36, text_color: 0xFFFFFF}
                           # Play / pause: glowing blue-purple ring like the mockup.
-                          - button:
+                          - button: # Play / Pause
                               id: media_play_btn
                               styles: round_btn
                               align: TOP_MID
@@ -3690,7 +3685,7 @@ lvgl:
                                           service: !lambda 'return id(media_state) == "playing" ? "media_player.media_play" : "media_player.media_pause";'
                               widgets:
                                 - label: {id: media_play_icon, align: CENTER, text: "\U000F040A", text_font: font_mdi_36, text_color: 0xFFFFFF}
-                          - button:
+                          - button: # Next track button
                               id: media_next_btn
                               styles: round_btn
                               align: TOP_MID
@@ -5014,8 +5009,8 @@ lvgl:
             widgets:
               - label: {align: CENTER, text: "Reboot", text_font: font_body, text_color: 0xFFFFFF}
 
-        # Bottom right: why the panel last restarted, and uptime in minutes.
-        # Filled by update_settings_info (on page load, then every 3 s).
+        # Bottom right: why the panel last restarted (update_settings_info, on
+        # page load) and the uptime (uptime_text sensor, every 60 s).
         - label:
             id: settings_reset_reason_label
             align: BOTTOM_RIGHT
@@ -5029,7 +5024,7 @@ lvgl:
             align: BOTTOM_RIGHT
             x: -24
             y: -22
-            text: "Uptime --:--:--"
+            text: "Uptime --"
             text_font: font_small
             text_color: 0xA7B2C4
 
@@ -6718,8 +6713,6 @@ script:
 #          state:
 #            checked: !lambda 'return id(agc_switch).state;'
 
-  # Settings page, bottom right: last reset reason and uptime (whole minutes,
-  # rounded up). millis_64() does not wrap after 49 days.
   - id: update_settings_info
     then:
       - lambda: |-
@@ -6740,22 +6733,6 @@ script:
           char text[48];
           snprintf(text, sizeof(text), "Last restart: %s", reason);
           lv_label_set_text(id(settings_reset_reason_label), text);
-
-          // "Uptime < 1 min", then whole minutes rounded up: "Uptime 3d 4h 12m".
-          const uint64_t s = millis_64() / 1000;
-          if (s < 60) {
-            snprintf(text, sizeof(text), "Uptime < 1 min");
-          } else {
-            const uint64_t m = (s + 59) / 60;
-            const unsigned d = m / 1440, h = m / 60 % 24, mi = m % 60;
-            if (d > 0)
-              snprintf(text, sizeof(text), "Uptime %ud %uh %um", d, h, mi);
-            else if (h > 0)
-              snprintf(text, sizeof(text), "Uptime %uh %um", h, mi);
-            else
-              snprintf(text, sizeof(text), "Uptime %um", mi);
-          }
-          lv_label_set_text(id(settings_uptime_label), text);
 
   - id: update_ic_idle_labels
     then:
@@ -7664,6 +7641,19 @@ sensor:
             args: ['x * ${soil_moisture_scale}']
 
 text_sensor:
+  # Uptime ("3d 4h 12m 5s"), also shown bottom right on the Settings page.
+  - platform: uptime
+    name: "Uptime"
+    id: uptime_text
+    update_interval: 60s
+    entity_category: "diagnostic"
+    format:
+      separator: " "
+    on_value:
+      - lvgl.label.update:
+          id: settings_uptime_label
+          text: !lambda 'return "Uptime " + x;'
+
   ##RTSP camera url.
   - platform: homeassistant
     id: cam_url
@@ -7817,15 +7807,9 @@ text_sensor:
 
 interval:
   # Lights card: re-sync the tiles with HA (catches a missed state update).
-  # Settings page: uptime in whole minutes, only while that page is shown.
   - interval: 3s
     then:
       - script.execute: light_tiles_check
-      - if:
-          condition:
-            lambda: return id(settings_p4_page)->is_showing();
-          then:
-            - script.execute: update_settings_info
 
   - interval: 1s
     then:
