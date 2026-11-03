@@ -10960,8 +10960,8 @@ function object1Max() = [121.400, 79.350, 18.000];
 //          "open"     : cap installed, slid open (screw hole exposed)
 //
 // A horizontal dovetail groove is cut into the outer face of the top frame
-// wall (Y=79.35), just above the anti-lift tab. The 3 mm wall is thickened
-// INWARD to ~7 mm, only in the bottom half (Z 0..9). That keeps clear of the
+// wall (Y=79.35), just above the anti-lift tab. 
+// The 3 mm wall is thickened  INWARD to ~7 mm, only in the bottom half (Z 0..9). That keeps clear of the
 // screen recess (ledge at Z=13.3) and adds nothing outside the frame.
 // The cap's key enters straight through a widened entry pocket at the -X end,
 // then slides +X along the dovetail until it stops over the screw hole.
@@ -11044,7 +11044,7 @@ module slide_cap() {
     }
 }
 
-// Screw pads: increased from 4mm to 7mm total thickness (z 9.3..16.3).
+// Screw pads (for 13mm long 2.5mm screw): increased from 4mm to 7mm total thickness (z 7.3..10.3).
 // Added 3mm annular extensions above the existing pads; 2.8mm screw clearance retained.
 // at (+-106.4, +-64.35) and (16.4, +-64.35).
 module mount() {
@@ -11052,15 +11052,28 @@ color("black")
 difference() {
 union() {
     object1(1);
-    // Extend the six existing screw pads by 3mm while retaining the M2.5 clearance holes.
-    // The annular extensions sit on the existing pad tops at z=13.3mm.
-    for (p = [[-106.4,-64.35],[-106.4,64.35],[106.4,-64.35],[106.4,64.35],[16.4,-64.35],[16.4,64.35]]) {
-        translate([p[0], p[1], 13.3])
-            difference() {
-                cylinder(h=3, r=7, $fn=64);
-                translate([0,0,-0.1]) cylinder(h=3.2, d=2.8, $fn=32);
-            }
-    }
+    
+ // Extend the six existing screw pads by 3mm
+ // towards the NEGATIVE Z-axis.
+ // Extension range: Z=10.3 to Z=13.3
+ // Retain M2.5 clearance holes.
+
+ for (p = [
+     [-106.4,-64.35],
+     [-106.4, 64.35],
+     [ 106.4,-64.35],
+     [ 106.4, 64.35],
+     [  16.4,-64.35],
+     [  16.4, 64.35]
+ ]) {
+     translate([p[0], p[1], 7.3])
+         difference() {
+             cylinder(h=3, r=5, $fn=64);
+             translate([0,0,-0.1])
+                 cylinder(h=3.2, d=2.8, $fn=32);
+         }
+ }
+
     // fill the old USB cable half circle notch (x 95.4..101.4) at the bottom of the front wall
     translate([95.0, -79.35, 0]) cube([6.8, 3.0, 5.5]);   // 3mm wall, notch was up to z=5
     translate([95.0, -76.35, 0]) cube([6.8, 3.0, 3.0]);   // 3mm base lip behind the wall

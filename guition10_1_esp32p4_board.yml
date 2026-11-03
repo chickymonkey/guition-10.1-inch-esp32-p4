@@ -6317,7 +6317,8 @@ script:
                       tag: nba
                       format: "NBA calendar request failed"
 
-  # Fill nba_track with the games not over yet (at most 20): the two teams
+  # Fill nba_track with one day's games not over yet (today, or the next day
+  # with games; at most 20): the two teams
   # (logo, name) stacked on the left, the day and start time on the right,
   # LIVE while a game is on. Five fit across; with more, the first five are
   # added again at the end so nba_marquee can loop without a jump.
@@ -6372,10 +6373,20 @@ script:
           const int slot = width / PER_SCREEN;
           id(nba_slot_width) = slot;
 
+          // One day only: the day of the next game not over yet (today while
+          // today has games left, else the next day with games), plus any
+          // game still on from the night before.
           std::vector<const std::pair<std::array<int, 5>, std::string> *> shown;
+          int game_day = -1;
           for (const auto &g : id(nba_games)) {
-            if (g.first[1] > now_min)
-              shown.push_back(&g);
+            const auto &t = g.first;
+            if (t[1] <= now_min)
+              continue;
+            if (game_day < 0)
+              game_day = std::max(t[0] / 1440, today);
+            if (t[0] / 1440 != game_day && t[0] > now_min)
+              break;  // sorted by start: the rest are later days
+            shown.push_back(&g);
             if ((int) shown.size() == MAX_GAMES)
               break;
           }
