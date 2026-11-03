@@ -72,14 +72,15 @@ substitutions:
   i2s_dout_pin: GPIO9
 
   # ---------------------------------------------------------------------------
-  # Pinout: display, backlight, speaker amp and physical button
+  # Pinout: display, touch, backlight, speaker amp and physical button
   # ---------------------------------------------------------------------------
   display_reset_pin: "27"
   display_backlight_pin: GPIO23   # [GUITION] LCD_PWM -> MP3202 EN
   speaker_enable_pin: GPIO20      # [GUITION] PA_CTRL -> NS4150 CTRL (high = on, per vendor BSP)
   boot_button_pin: GPIO35         # [GUITION] SW3 BOOTMODE, 10K pull-up
   cooler_relay_pin: GPIO37        # [GUITION] CN2 pin 2 (UART0 TX) -> evaporative cooler relay S/IN
-
+  touch_reset_pin: GPIO22
+  touch_int_pin: GPIO21
   # ---------------------------------------------------------------------------
   # Home Assistant entities shown on the home page
   # ---------------------------------------------------------------------------
@@ -151,6 +152,8 @@ substitutions:
   calendar_personal_name: "Personal"
   calendar_school_entity: calendar.vic_school_term
   calendar_school_name: "School"
+  # Home page NBA strip: the coming games from this calendar.
+  calendar_nba_entity: calendar.nba26_27
   ha_token: !secret ha_token
 
 # Shared packages: P4 base/hosted Wi-Fi, VoIP transport and settings, JPEG
@@ -399,6 +402,11 @@ time:
             lambda: return id(cal_events).empty();
           then:
             - script.execute: calendar_fetch
+      - if:
+          condition:
+            lambda: return id(nba_games).empty();
+          then:
+            - script.execute: nba_fetch
       - if:
           condition:
             lambda: return std::isnan(id(energy_history)[13]);
@@ -686,6 +694,8 @@ voip_stack:
         frame_ms: 32
   microphone: mic_aec          # Post-AEC: no echo in transmitted audio
   speaker: voip_speaker_input
+  # Video (codec, source, sink, size) comes from the p4_video_jpeg package,
+  # sized by the p4_video_* substitutions.
   ringing_timeout: 30s
   delete_contact_missing_from:
     updates_number: 1
@@ -764,6 +774,8 @@ touchscreen:
     id: main_touch
     i2c_id: internal_i2c
     display: main_display
+    interrupt_pin: ${touch_int_pin}
+    reset_pin: ${touch_reset_pin}
     on_touch:
       # DEBUG: confirms the controller reports touches at all.
       - logger.log:
@@ -1098,6 +1110,38 @@ image:
     on_download_finished:
       - lvgl.image.update: {id: cam_drive_cat_snap, src: cam_drive_cat_img}
       - lvgl.widget.show: cam_drive_cat_snap
+  # Home page NBA strip: team logos (30x30 PNGs) in the order of nba_draw's
+  # NAMES / LOGOS.
+  - {platform: file, file: "${images_base}nba/atl.png", id: nba_atl, resize: 22x22, type: RGB565, transparency: alpha_channel, byte_order: little_endian}
+  - {platform: file, file: "${images_base}nba/bkn.png", id: nba_bkn, resize: 22x22, type: RGB565, transparency: alpha_channel, byte_order: little_endian}
+  - {platform: file, file: "${images_base}nba/bos.png", id: nba_bos, resize: 22x22, type: RGB565, transparency: alpha_channel, byte_order: little_endian}
+  - {platform: file, file: "${images_base}nba/cha.png", id: nba_cha, resize: 22x22, type: RGB565, transparency: alpha_channel, byte_order: little_endian}
+  - {platform: file, file: "${images_base}nba/chi.png", id: nba_chi, resize: 22x22, type: RGB565, transparency: alpha_channel, byte_order: little_endian}
+  - {platform: file, file: "${images_base}nba/cle.png", id: nba_cle, resize: 22x22, type: RGB565, transparency: alpha_channel, byte_order: little_endian}
+  - {platform: file, file: "${images_base}nba/dal.png", id: nba_dal, resize: 22x22, type: RGB565, transparency: alpha_channel, byte_order: little_endian}
+  - {platform: file, file: "${images_base}nba/den.png", id: nba_den, resize: 22x22, type: RGB565, transparency: alpha_channel, byte_order: little_endian}
+  - {platform: file, file: "${images_base}nba/det.png", id: nba_det, resize: 22x22, type: RGB565, transparency: alpha_channel, byte_order: little_endian}
+  - {platform: file, file: "${images_base}nba/gs.png", id: nba_gs, resize: 22x22, type: RGB565, transparency: alpha_channel, byte_order: little_endian}
+  - {platform: file, file: "${images_base}nba/hou.png", id: nba_hou, resize: 22x22, type: RGB565, transparency: alpha_channel, byte_order: little_endian}
+  - {platform: file, file: "${images_base}nba/ind.png", id: nba_ind, resize: 22x22, type: RGB565, transparency: alpha_channel, byte_order: little_endian}
+  - {platform: file, file: "${images_base}nba/lac.png", id: nba_lac, resize: 22x22, type: RGB565, transparency: alpha_channel, byte_order: little_endian}
+  - {platform: file, file: "${images_base}nba/lal.png", id: nba_lal, resize: 22x22, type: RGB565, transparency: alpha_channel, byte_order: little_endian}
+  - {platform: file, file: "${images_base}nba/mem.png", id: nba_mem, resize: 22x22, type: RGB565, transparency: alpha_channel, byte_order: little_endian}
+  - {platform: file, file: "${images_base}nba/mia.png", id: nba_mia, resize: 22x22, type: RGB565, transparency: alpha_channel, byte_order: little_endian}
+  - {platform: file, file: "${images_base}nba/mil.png", id: nba_mil, resize: 22x22, type: RGB565, transparency: alpha_channel, byte_order: little_endian}
+  - {platform: file, file: "${images_base}nba/min.png", id: nba_min, resize: 22x22, type: RGB565, transparency: alpha_channel, byte_order: little_endian}
+  - {platform: file, file: "${images_base}nba/no.png", id: nba_no, resize: 22x22, type: RGB565, transparency: alpha_channel, byte_order: little_endian}
+  - {platform: file, file: "${images_base}nba/ny.png", id: nba_ny, resize: 22x22, type: RGB565, transparency: alpha_channel, byte_order: little_endian}
+  - {platform: file, file: "${images_base}nba/okc.png", id: nba_okc, resize: 22x22, type: RGB565, transparency: alpha_channel, byte_order: little_endian}
+  - {platform: file, file: "${images_base}nba/orl.png", id: nba_orl, resize: 22x22, type: RGB565, transparency: alpha_channel, byte_order: little_endian}
+  - {platform: file, file: "${images_base}nba/phi.png", id: nba_phi, resize: 22x22, type: RGB565, transparency: alpha_channel, byte_order: little_endian}
+  - {platform: file, file: "${images_base}nba/phx.png", id: nba_phx, resize: 22x22, type: RGB565, transparency: alpha_channel, byte_order: little_endian}
+  - {platform: file, file: "${images_base}nba/por.png", id: nba_por, resize: 22x22, type: RGB565, transparency: alpha_channel, byte_order: little_endian}
+  - {platform: file, file: "${images_base}nba/sa.png", id: nba_sa, resize: 22x22, type: RGB565, transparency: alpha_channel, byte_order: little_endian}
+  - {platform: file, file: "${images_base}nba/sac.png", id: nba_sac, resize: 22x22, type: RGB565, transparency: alpha_channel, byte_order: little_endian}
+  - {platform: file, file: "${images_base}nba/tor.png", id: nba_tor, resize: 22x22, type: RGB565, transparency: alpha_channel, byte_order: little_endian}
+  - {platform: file, file: "${images_base}nba/utah.png", id: nba_utah, resize: 22x22, type: RGB565, transparency: alpha_channel, byte_order: little_endian}
+  - {platform: file, file: "${images_base}nba/wsh.png", id: nba_wsh, resize: 22x22, type: RGB565, transparency: alpha_channel, byte_order: little_endian}
 
 
 lvgl:
@@ -1440,8 +1484,8 @@ lvgl:
   pages:
     - id: home_page
       # 4 rows x 13 columns. Row heights are in pixels (FR weights summing to
-      # 800): top status bar 44, top cards 396, bottom cards 300, bottom
-      # margin 60. Column 0 is the sidebar; each card column is ~98 px.
+      # 800): top status bar 44, top cards 396, bottom cards 300, NBA strip
+      # 60. Column 0 is the sidebar; each card column is ~98 px.
       layout:
         type: grid
         grid_rows: [FR(44), FR(396), FR(300), FR(60)]
@@ -2617,6 +2661,38 @@ lvgl:
                         widgets:
                           - label: {align: LEFT_MID, x: 14, text: "\U000F011B", text_font: font_mdi_36, text_color: 0xB8C8F0}
                           - label: {align: LEFT_MID, x: 62, text: "Cat Away", text_font: font_small}
+
+        # =====================================================================
+        # NBA GAMES (bottom margin)                col 1 span 12 | row 3
+        # The coming games from ${calendar_nba_entity}: five across, split by
+        # "|". nba_draw fills nba_track; with more than five, nba_marquee moves
+        # it along by one game every 3 s.
+        # =====================================================================
+        - obj:
+            id: nba_strip
+            styles: cell_style
+            scrollable: false
+            grid_cell_column_pos: 1
+            grid_cell_row_pos: 3
+            grid_cell_column_span: 12
+            grid_cell_row_span: 1
+            grid_cell_x_align: STRETCH
+            grid_cell_y_align: STRETCH
+            widgets:
+              - obj:
+                  id: nba_track
+                  x: 0
+                  y: 0
+                  width: 100%
+                  height: 100%
+                  bg_opa: TRANSP
+                  border_width: 0
+                  radius: 0
+                  pad_all: 0
+                  scrollable: false
+                  clickable: false
+                  text_font: font_small
+                  text_color: 0xFFFFFF
 
 
     # ==================================================================
@@ -5308,6 +5384,28 @@ globals:
     type: std::string
     restore_value: false
 
+  # Home page NBA strip, from nba_fetch: ({start, end (minutes since
+  # 1970-01-01, local time), all day 0/1, first team, second team (index in
+  # nba_draw's NAMES, -1 if not found)}, title), sorted by start.
+  - id: nba_games
+    type: std::vector<std::pair<std::array<int, 5>, std::string>>
+    restore_value: false
+
+  # nba_marquee: the games in the loop (0 when five or fewer, no scrolling),
+  # the width of one game, and how many games the row has moved along.
+  - id: nba_loop_count
+    type: int
+    restore_value: false
+    initial_value: "0"
+  - id: nba_slot_width
+    type: int
+    restore_value: false
+    initial_value: "0"
+  - id: nba_shift
+    type: int
+    restore_value: false
+    initial_value: "0"
+
   # Heating and Cooling timers, set in heater_sched_popup and used when the
   # power button starts the selected mode; each is kept until it fires or
   # the heater is turned off (power button) or on/off elsewhere.
@@ -6090,6 +6188,295 @@ script:
             lv_obj_remove_flag(id(clock_ev_none), LV_OBJ_FLAG_HIDDEN);
           else
             lv_obj_add_flag(id(clock_ev_none), LV_OBJ_FLAG_HIDDEN);
+
+  # Home page NBA strip: read the games from yesterday (the range is safe
+  # whichever way HA reads the offset-less times) to a week ahead from HA's
+  # REST API, as calendar_fetch_one, then draw.
+  - id: nba_fetch
+    mode: single
+    then:
+      - if:
+          condition:
+            time.has_time:
+              id: my_time
+          then:
+            - http_request.get:
+                url: !lambda |-
+                  const auto now = id(my_time).now();
+                  const auto start = ESPTime::from_epoch_local(now.timestamp - 86400);
+                  const auto end = ESPTime::from_epoch_local(now.timestamp + 8 * 86400);
+                  char query[80];
+                  snprintf(query, sizeof(query), "?start=%04d-%02d-%02dT00:00:00&end=%04d-%02d-%02dT00:00:00",
+                           start.year, start.month, start.day_of_month, end.year, end.month, end.day_of_month);
+                  return std::string("${ha_base_url}/api/calendars/${calendar_nba_entity}") + query;
+                request_headers:
+                  Authorization: "Bearer ${ha_token}"
+                capture_response: true
+                max_response_buffer_size: 65536
+                on_response:
+                  then:
+                    - lambda: |-
+                        if (response->status_code != 200) {
+                          ESP_LOGW("nba", "HA returned HTTP %d", response->status_code);
+                          return;
+                        }
+                        JsonDocument filter;
+                        filter[0]["summary"] = true;
+                        filter[0]["start"] = true;
+                        filter[0]["end"] = true;
+                        JsonDocument doc;
+                        const auto err = deserializeJson(doc, body, DeserializationOption::Filter(filter));
+                        if (err) {
+                          ESP_LOGW("nba", "Bad games JSON (%u bytes): %s", (unsigned) body.size(), err.c_str());
+                          return;
+                        }
+                        // Team names and abbreviations (whole words, case as written) and
+                        // their index in nba_draw's NAMES / LOGOS.
+                        static const std::pair<const char *, int> KEYS[] = {
+                            {"Hawks", 0}, {"Nets", 1}, {"Celtics", 2}, {"Hornets", 3}, {"Bulls", 4},
+                            {"Cavaliers", 5}, {"Cavs", 5}, {"Mavericks", 6}, {"Mavs", 6}, {"Nuggets", 7},
+                            {"Pistons", 8}, {"Warriors", 9}, {"Rockets", 10}, {"Pacers", 11}, {"Clippers", 12},
+                            {"Lakers", 13}, {"Grizzlies", 14}, {"Heat", 15}, {"Bucks", 16}, {"Timberwolves", 17},
+                            {"Pelicans", 18}, {"Knicks", 19}, {"Thunder", 20}, {"Magic", 21}, {"76ers", 22},
+                            {"Sixers", 22}, {"Suns", 23}, {"Blazers", 24}, {"Spurs", 25}, {"Kings", 26},
+                            {"Raptors", 27}, {"Jazz", 28}, {"Wizards", 29},
+                            {"ATL", 0}, {"BKN", 1}, {"BOS", 2}, {"CHA", 3}, {"CHI", 4}, {"CLE", 5}, {"DAL", 6},
+                            {"DEN", 7}, {"DET", 8}, {"GSW", 9}, {"GS", 9}, {"HOU", 10}, {"IND", 11}, {"LAC", 12},
+                            {"LAL", 13}, {"MEM", 14}, {"MIA", 15}, {"MIL", 16}, {"MIN", 17}, {"NOP", 18}, {"NO", 18},
+                            {"NYK", 19}, {"NY", 19}, {"OKC", 20}, {"ORL", 21}, {"PHI", 22}, {"PHX", 23}, {"POR", 24},
+                            {"SAS", 25}, {"SA", 25}, {"SAC", 26}, {"TOR", 27}, {"UTA", 28}, {"UTAH", 28},
+                            {"WAS", 29}, {"WSH", 29}};
+                        auto find_word = [](const std::string &s, const char *word) {
+                          const size_t n = strlen(word);
+                          for (size_t p = s.find(word); p != std::string::npos; p = s.find(word, p + 1)) {
+                            if ((p == 0 || !isalnum((unsigned char) s[p - 1])) &&
+                                (p + n >= s.size() || !isalnum((unsigned char) s[p + n])))
+                              return (int) p;
+                          }
+                          return -1;
+                        };
+                        // Days since 1970-01-01 and the time parser (as in calendar_fetch_one).
+                        auto days = [](int y, int m, int d) {
+                          y -= m <= 2;
+                          const int era = y / 400, yoe = y - era * 400;
+                          const int doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+                          return era * 146097 + yoe * 365 + yoe / 4 - yoe / 100 + doy - 719468;
+                        };
+                        auto parse = [&days](JsonObjectConst t, int &day, int &minute) {
+                          int y, m, d, h, mi;
+                          if (sscanf(t["dateTime"] | "", "%d-%d-%dT%d:%d", &y, &m, &d, &h, &mi) == 5) {
+                            day = days(y, m, d);
+                            minute = h * 60 + mi;
+                            return true;
+                          }
+                          if (sscanf(t["date"] | "", "%d-%d-%d", &y, &m, &d) == 3) {
+                            day = days(y, m, d);
+                            minute = -1;
+                            return true;
+                          }
+                          return false;
+                        };
+                        auto &games = id(nba_games);
+                        games.clear();
+                        for (JsonObjectConst ev : doc.as<JsonArrayConst>()) {
+                          int start, start_min, end, end_min;
+                          if (!parse(ev["start"].as<JsonObjectConst>(), start, start_min) ||
+                              !parse(ev["end"].as<JsonObjectConst>(), end, end_min))
+                            continue;
+                          const std::string title = ev["summary"] | "";
+                          // The two teams, in the order the title names them.
+                          int first = -1, second = -1, first_pos = INT_MAX, second_pos = INT_MAX;
+                          for (const auto &key : KEYS) {
+                            const int p = find_word(title, key.first);
+                            if (p < 0 || key.second == first || key.second == second)
+                              continue;
+                            if (p < first_pos) {
+                              second = first;
+                              second_pos = first_pos;
+                              first = key.second;
+                              first_pos = p;
+                            } else if (p < second_pos) {
+                              second = key.second;
+                              second_pos = p;
+                            }
+                          }
+                          if (second < 0)
+                            ESP_LOGD("nba", "No two teams found in \"%s\"", title.c_str());
+                          // An all-day end date is already exclusive.
+                          games.emplace_back(std::array<int, 5>{start * 1440 + std::max(start_min, 0),
+                                                                end * 1440 + std::max(end_min, 0),
+                                                                start_min < 0, first, second},
+                                             title);
+                        }
+                        std::sort(games.begin(), games.end());
+                        ESP_LOGD("nba", "%u games", (unsigned) games.size());
+                    - script.execute: nba_draw
+                on_error:
+                  - logger.log:
+                      level: WARN
+                      tag: nba
+                      format: "NBA calendar request failed"
+
+  # Fill nba_track with the games not over yet (at most 20): the two teams
+  # (logo, name) stacked on the left, the day and start time on the right,
+  # LIVE while a game is on. Five fit across; with more, the first five are
+  # added again at the end so nba_marquee can loop without a jump.
+  - id: nba_draw
+    then:
+      - lambda: |-
+          static const char *const NAMES[] = {
+              "Hawks", "Nets", "Celtics", "Hornets", "Bulls", "Cavaliers", "Mavericks", "Nuggets",
+              "Pistons", "Warriors", "Rockets", "Pacers", "Clippers", "Lakers", "Grizzlies", "Heat",
+              "Bucks", "Timberwolves", "Pelicans", "Knicks", "Thunder", "Magic", "76ers", "Suns",
+              "Trail Blazers", "Spurs", "Kings", "Raptors", "Jazz", "Wizards"};
+          image::Image *const LOGOS[] = {
+              id(nba_atl), id(nba_bkn), id(nba_bos), id(nba_cha), id(nba_chi), id(nba_cle), id(nba_dal),
+              id(nba_den), id(nba_det), id(nba_gs), id(nba_hou), id(nba_ind), id(nba_lac), id(nba_lal),
+              id(nba_mem), id(nba_mia), id(nba_mil), id(nba_min), id(nba_no), id(nba_ny), id(nba_okc),
+              id(nba_orl), id(nba_phi), id(nba_phx), id(nba_por), id(nba_sa), id(nba_sac), id(nba_tor),
+              id(nba_utah), id(nba_wsh)};
+          static const char *const MONTHS[] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                                               "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
+          static const char *const WEEKDAYS[] = {"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"};
+          static const int PER_SCREEN = 5, MAX_GAMES = 20;
+          // Days since 1970-01-01 and back (as in calendar_draw).
+          auto days = [](int y, int m, int d) {
+            y -= m <= 2;
+            const int era = y / 400, yoe = y - era * 400;
+            const int doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+            return era * 146097 + yoe * 365 + yoe / 4 - yoe / 100 + doy - 719468;
+          };
+          auto civil = [](int z, int &y, int &m, int &d) {
+            z += 719468;
+            const int era = z / 146097, doe = z - era * 146097;
+            const int yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+            const int doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+            const int mp = (5 * doy + 2) / 153;
+            d = doy - (153 * mp + 2) / 5 + 1;
+            m = mp < 10 ? mp + 3 : mp - 9;
+            y = yoe + era * 400 + (m <= 2);
+          };
+          const auto now = id(my_time).now();
+          if (!now.is_valid())
+            return;
+          const int today = days(now.year, now.month, now.day_of_month);
+          const int now_min = today * 1440 + now.hour * 60 + now.minute;
+
+          lv_obj_t *strip = id(nba_strip), *track = id(nba_track);
+          lv_anim_del(track, nullptr);
+          lv_obj_clean(track);
+          lv_obj_set_x(track, 0);
+          id(nba_shift) = 0;
+          lv_obj_update_layout(strip);
+          const int width = lv_obj_get_content_width(strip), height = lv_obj_get_content_height(strip);
+          const int slot = width / PER_SCREEN;
+          id(nba_slot_width) = slot;
+
+          std::vector<const std::pair<std::array<int, 5>, std::string> *> shown;
+          for (const auto &g : id(nba_games)) {
+            if (g.first[1] > now_min)
+              shown.push_back(&g);
+            if ((int) shown.size() == MAX_GAMES)
+              break;
+          }
+          const int count = shown.size();
+          id(nba_loop_count) = count > PER_SCREEN ? count : 0;
+          if (count == 0) {
+            lv_obj_set_size(track, width, height);
+            lv_obj_t *label = lv_label_create(track);
+            lv_label_set_text(label, "No NBA games this week");
+            lv_obj_set_style_text_color(label, lv_color_hex(0x9AA7B8), LV_PART_MAIN);
+            lv_obj_center(label);
+            return;
+          }
+          const int cells = count > PER_SCREEN ? count + PER_SCREEN : count;
+          lv_obj_set_size(track, cells * slot, height);
+          for (int i = 0; i < cells; i++) {
+            const auto &t = shown[i % count]->first;
+            const int x = i * slot;
+            const int right = x + slot - cells * slot - 10;  // TOP_RIGHT offset: 10 px inside this game's slot
+            if (i > 0) {
+              lv_obj_t *bar = lv_label_create(track);
+              lv_label_set_text(bar, "|");
+              lv_obj_set_style_text_color(bar, lv_color_hex(0xAAAAAA), LV_PART_MAIN);
+              lv_obj_align(bar, LV_ALIGN_LEFT_MID, x - 2, 0);
+            }
+            // Teams: two rows of 24 px, logo then name.
+            if (t[3] >= 0 && t[4] >= 0) {
+              for (int r = 0; r < 2; r++) {
+                lv_obj_t *logo = lv_image_create(track);
+                lv_image_set_src(logo, LOGOS[t[3 + r]]->get_lv_image_dsc());
+                lv_obj_set_pos(logo, x + 12, r * 24 + 1);
+                lv_obj_t *name = lv_label_create(track);
+                lv_label_set_text(name, NAMES[t[3 + r]]);
+                lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
+                lv_obj_set_width(name, slot - 128);
+                lv_obj_set_pos(name, x + 40, r * 24 + 2);
+              }
+            } else {
+              lv_obj_t *title = lv_label_create(track);
+              lv_label_set_text(title, shown[i % count]->second.c_str());
+              lv_label_set_long_mode(title, LV_LABEL_LONG_DOT);
+              lv_obj_set_size(title, slot - 100, height);
+              lv_obj_set_pos(title, x + 12, 2);
+            }
+            // Right: "Today" / "Tomorrow" / "Sat 8 Nov" over the start time,
+            // or LIVE over it while the game is on.
+            const int day = t[0] / 1440;
+            std::string when;
+            uint32_t colour = 0x8FA3D0;
+            if (!t[2] && t[0] <= now_min) {
+              when = "LIVE";
+              colour = 0xFF5A5A;
+            } else if (day == today) {
+              when = "Today";
+            } else if (day == today + 1) {
+              when = "Tomorrow";
+            } else {
+              int y, m, d;
+              civil(day, y, m, d);
+              char text[16];
+              snprintf(text, sizeof(text), "%s %d %s", WEEKDAYS[(day + 3) % 7], d, MONTHS[m - 1]);
+              when = text;
+            }
+            lv_obj_t *when_label = lv_label_create(track);
+            lv_label_set_text(when_label, when.c_str());
+            lv_obj_set_style_text_color(when_label, lv_color_hex(colour), LV_PART_MAIN);
+            lv_obj_align(when_label, LV_ALIGN_TOP_RIGHT, right, 2);
+            if (!t[2]) {
+              char text[8];
+              snprintf(text, sizeof(text), "%02d:%02d", t[0] % 1440 / 60, t[0] % 60);
+              lv_obj_t *time_label = lv_label_create(track);
+              lv_label_set_text(time_label, text);
+              lv_obj_set_style_text_color(time_label, lv_color_hex(0x8FA3D0), LV_PART_MAIN);
+              lv_obj_align(time_label, LV_ALIGN_TOP_RIGHT, right, 26);
+            }
+          }
+
+  # NBA strip with more than five games: slide nba_track along by one game.
+  # After the last game the copies of the first five are showing, which
+  # look the same as the start, so it jumps back there first.
+  - id: nba_marquee
+    then:
+      - lambda: |-
+          lv_obj_t *track = id(nba_track);
+          const int slot = id(nba_slot_width);
+          int &shift = id(nba_shift);
+          if (shift >= id(nba_loop_count)) {
+            shift = 0;
+            lv_obj_set_x(track, 0);
+          }
+          lv_anim_t a;
+          lv_anim_init(&a);
+          lv_anim_set_var(&a, track);
+          lv_anim_set_values(&a, -shift * slot, -(shift + 1) * slot);
+          lv_anim_set_duration(&a, 600);
+          lv_anim_set_path_cb(&a, lv_anim_path_ease_in_out);
+          lv_anim_set_exec_cb(&a, [](void *obj, int32_t x) {
+            lv_obj_set_x((lv_obj_t *) obj, x);
+          });
+          lv_anim_start(&a);
+          shift++;
 
   # Download the latest Frigate snapshot through HA's image proxy. The short
   # delay lets the new entity_picture token arrive with the new state.
@@ -7840,9 +8227,15 @@ text_sensor:
 
 interval:
   # Lights card: re-sync the tiles with HA (catches a missed state update).
+  # Home page NBA strip: one game along when there are more than five.
   - interval: 3s
     then:
       - script.execute: light_tiles_check
+      - if:
+          condition:
+            lambda: return id(nba_loop_count) > 0 && id(home_page)->is_showing();
+          then:
+            - script.execute: nba_marquee
 
   - interval: 1s
     then:
@@ -7880,6 +8273,9 @@ interval:
       # Check the Wi-Fi signal every 45 s, too, so the status bar shows it promptly.
       - script.execute: update_status_bar
 
+  # Calendars, and the NBA games (finished ones drop off, LIVE updates).
   - interval: 20min
     then:
       - script.execute: calendar_fetch
+      - script.wait: calendar_fetch
+      - script.execute: nba_fetch
