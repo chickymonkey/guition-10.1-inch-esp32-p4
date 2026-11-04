@@ -1,0 +1,2018 @@
+---
+substitutions:
+  #garage door control and state in the Home assitant:
+  garage_up: button.garage_roller_door_garage_up
+  garage_stop: button.garage_roller_door_garage_stop
+  garage_down: button.garage_roller_door_garage_down
+
+  garage_roller_door_position: sensor.garage_roller_door_garage_position
+
+  #lights:
+  light1: light.garage_light_1
+  light2: light.group_living_room
+  ##Scene list: make sure you have scene created in Home assistant, like "away home", "back_home"
+  scene1: scene.away_home
+  scene2: scene.back_home
+  # Alarm: Alarmo used here, change this to your alarm control entity id if you are using different one.
+  alarmo_id: alarm_control_panel.alarmo
+  # idle apge: temperature sensors, which usually can get via local bom integration:
+  temp_max_today: sensor.temp_max_today
+  temp_min_today: sensor.temp_min_today
+  temp_max_tomorrow: sensor.sensor_bom_temp_max_1
+  temp_min_tomorrow: sensor.sensor_bom_temp_min_1
+  temp_max_day_after: sensor.sensor_bom_temp_max_2
+  temp_min_day_after: sensor.sensor_bom_temp_min_2
+  #wall paper
+  idle_bg_file: /config/esphome/images/default/planet2.jpg
+  #idle_bg_file: https://raw.githubusercontent.com/chickymonkey/guition-4-inch-esp32-s3/7536460d72daeb86abe9635b221afafb6bceface/planet2.jpg
+  garage_bg_file: /config/esphome/images/default/garage_page_bg.jpg
+  #don't change anything below
+  # Number pad Column X positions
+  numpad_x1: "80"
+  numpad_x2: "210"
+  numpad_x3: "340"
+  # Number pad Row Y positions
+  numpad_y1: "95"   # Row 1 (1,2,3)
+  numpad_y2: "170"  # Row 2 (4,5,6)
+  numpad_y3: "245"  # Row 3 (7,8,9)
+  numpad_y4: "315"  # Row 4 (Clear, 0)
+  #Espnow
+  #espnow_peer1: "98:A3:16:8E:C4:CC"
+  espnow_receiver: "EC:64:C9:92:4F:D0"
+  #style
+  theme_color_primary: "0xF28B42" #orange
+  theme_color_secondary: "0xC8B1A0" #light orange
+  theme_color_inactive: "0x6e6d6d"
+  security_color_disarm: "0x2DF1DA"
+  security_color_armed: "0xCE0D15"
+esphome:
+  name: "guition-esp32-s3-4848s040"
+  friendly_name: "Guition 4inch Relay"
+  platformio_options:
+    board_build.flash_mode: dio
+  on_boot:
+    priority: -100
+    then:
+      - script.execute: inactivity_timer
+      - delay: 8s
+      - script.execute: garage_btn_check
+      - script.execute: living_room_light_check
+      - component.update: tft_display
+
+esp32:
+  variant: esp32s3
+  flash_size: 16MB
+  framework:
+    type: esp-idf
+    sdkconfig_options:
+      #COMPILER_OPTIMIZATION_SIZE: y
+      CONFIG_ESP32S3_DEFAULT_CPU_FREQ_240: "y"
+      CONFIG_ESP32S3_DATA_CACHE_64KB: "y"
+      CONFIG_ESP32S3_DATA_CACHE_LINE_64B: "y"
+      CONFIG_SPIRAM_FETCH_INSTRUCTIONS: y
+      CONFIG_SPIRAM_RODATA: y
+    advanced:
+      #Added for optimization
+      execute_from_psram: "true"
+      compiler_optimization: "PERF"
+
+psram:
+  mode: octal
+  speed: 80MHz
+logger:
+  level: DEBUG
+api:
+  encryption:
+    key: "zlqbDIryk6UZpyngCZxnMgWq8oxtAOHFz557Oz8P9k8="
+ota:
+  - platform: esphome
+    password: "f7a6325bea38814e149ca742af39893e"
+    on_begin: # prevent  flickering during OTA
+      - light.turn_off:
+          id: display_backlight
+          transition_length: 0s
+      - lambda: "id(display_backlight).loop();"
+captive_portal:
+web_server:  
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  ap:
+    ssid: "Guition-4Inch-V1"
+    password: "Wifi12345"
+time:
+  - platform: homeassistant
+    id: ha_time
+    on_time_sync:
+      then:
+        - lvgl.label.update:
+            id: display_time
+            text: !lambda |-
+              char buf[6];
+              auto t = id(ha_time).now();
+              snprintf(buf, sizeof(buf), "%02d:%02d", t.hour, t.minute);
+              return std::string(buf);
+    on_time:
+      - seconds: 0
+        then:
+          #update clock in status bar
+          - lvgl.label.update:
+              id: display_time
+              text: !lambda |-
+                char buf[6];
+                auto t = id(ha_time).now();
+                snprintf(buf, sizeof(buf), "%02d:%02d", t.hour, t.minute);
+                return std::string(buf);
+
+          # Also keep idle page clock in sync
+          #Test new time
+          # AM / PM
+          - lvgl.label.update:
+              id: lbl_ampm
+              text: !lambda |-
+                auto t = id(ha_time).now();
+                return (t.hour >= 12) ? "PM" : "AM";
+          # Main clock
+          - lvgl.label.update:
+              id: lbl_hour
+              text: !lambda |-
+                auto t = id(ha_time).now();
+
+                int hour = t.hour % 12;
+                if (hour == 0) hour = 12;
+                char buf[8];
+                snprintf(buf, sizeof(buf), "%02d", hour);
+
+                return std::string(buf);
+          - lvgl.label.update:
+              id: lbl_min
+              text: !lambda |-
+                auto t = id(ha_time).now();
+                char buf[8];
+                snprintf(buf, sizeof(buf), "%02d", t.minute);
+
+                return std::string(buf);
+          # Day of week
+          - lvgl.label.update:
+              id: lbl_day
+              text: !lambda |-
+                auto t = id(ha_time).now();
+
+                static const char *days[] = {
+                  "SUNDAY",
+                  "MONDAY",
+                  "TUESDAY",
+                  "WEDNESDAY",
+                  "THURSDAY",
+                  "FRIDAY",
+                  "SATURDAY"
+                };
+
+                return std::string(days[t.day_of_week - 1]);
+
+          # Date
+          - lvgl.label.update:
+              id: lbl_date
+              text: !lambda |-
+                auto t = id(ha_time).now();
+
+                static const char *months[] = {
+                  "JAN","FEB","MAR","APR","MAY","JUN",
+                  "JUL","AUG","SEP","OCT","NOV","DEC"
+                };
+
+                char buf[24];
+
+                snprintf(buf,
+                         sizeof(buf),
+                         "%s %02d, %04d",
+                         months[t.month - 1],
+                         t.day_of_month,
+                         t.year);
+
+                return std::string(buf);        
+
+      - seconds: 0 #scheduled display on and off
+        minutes: 0
+        then:
+          - if:
+              condition:
+                lambda: |-
+                  auto t = id(ha_time).now();
+                  int end_h = (int) id(display_off_end).state;
+                  return (t.hour == end_h);
+              then:               
+                - if:
+                    condition:
+                      lambda: 'return !id(screen_active);'
+                    then:
+                      - light.turn_on:
+                          id: display_backlight
+                          brightness: 35%
+
+          - if:
+              condition:
+                lambda: |-
+                  auto t = id(ha_time).now();
+                  int start_h = (int) id(display_off_start).state;
+                  return (t.hour == start_h);
+              then:               
+                - if:
+                    condition:
+                      lambda: 'return !id(screen_active);'
+                    then:
+                      - light.turn_off:
+                          id: display_backlight
+
+switch:
+  - platform: gpio
+    name: Relay 1
+    id: relay1
+    pin:
+      number: GPIO40
+      inverted: False
+#below are working, but not used for now
+#  - platform: gpio
+#    name: Relay 2
+#    id: relay2
+#    pin:
+#      number: GPIO2
+#      inverted: False
+#  - platform: gpio
+#    name: Relay 3
+#    id: relay3
+#    pin:
+#      number: GPIO1
+#      inverted: False
+
+output:
+  - platform: ledc
+    id: backlight_output
+    pin: GPIO38
+    frequency: 150Hz
+    min_power: 0.01
+    zero_means_zero: true
+
+light:
+  - platform: monochromatic
+    name: Backlight
+    id: display_backlight
+    output: backlight_output
+    restore_mode: ALWAYS_ON
+    default_transition_length: 500ms
+
+spi:
+  - id: lcd_spi
+    clk_pin: GPIO48
+    mosi_pin: GPIO47
+
+i2c:
+  id: touchscreen_bus
+  sda: GPIO19
+  scl:
+    number: 45
+    ignore_strapping_warning: true
+
+interval:
+  - interval: 300ms
+    id: pin_udate
+    then:
+      - lvgl.label.update:
+          id: pin_display
+          text: !lambda |-
+            std::string pin = id(current_pin);
+            std::string masked = "";
+            for (int i = 0; i < pin.length(); i++) {
+              masked += "*";
+            }
+            if (masked.empty()) return std::string("----");
+            return masked;
+
+  - interval: 3s
+    id: light_ctr_btn_udate
+    then:
+      - script.execute: garage_btn_check
+      - script.execute: living_room_light_check
+  - interval: 700ms #security_label breath style when armed.
+    then:
+      - if:
+          condition:
+            lambda: 'return id(alarm_status).state != "disarmed";'
+          then:
+            - lambda: 'id(blink_on) = !id(blink_on);'
+            - lvgl.widget.update:
+                id: security_label
+                opa: !lambda 'return id(blink_on) ? LV_OPA_COVER : LV_OPA_TRANSP;'
+          else:
+            - lvgl.widget.update:
+                id: security_label
+                opa: COVER
+display:
+  - platform: st7701s
+    id: tft_display
+    show_test_card: False
+    dimensions:
+      width: 480
+      height: 480
+    #    rotation: 270    #uncomment for placement with down-facing USB socket
+    spi_mode: MODE3
+    data_rate: 2MHz
+    color_order: RGB
+    invert_colors: False
+    cs_pin: 39
+    de_pin: 18
+    hsync_pin: 16
+    vsync_pin: 17
+    pclk_pin: 21
+    pclk_frequency: 12MHz
+    pclk_inverted: False
+    hsync_pulse_width: 8
+    hsync_front_porch: 10
+    hsync_back_porch: 20
+    vsync_pulse_width: 8
+    vsync_front_porch: 10
+    vsync_back_porch: 10
+    update_interval: never
+    auto_clear_enabled: False
+    init_sequence:
+      - 1
+      - [0xFF, 0x77, 0x01, 0x00, 0x00, 0x10] # CMD2_BKSEL_BK0
+      - [0xCD, 0x00] # disable MDT flag
+    data_pins:
+      red: [11, 12, 13, 14, 0]
+      green: [8, 20, 3, 46, 9, 10]
+      blue: [4, 5, 6, 7, 15]
+
+touchscreen:
+  - platform: gt911
+    id: tft_touch
+    display: tft_display
+    #transform:     #uncomment for placement with down-facing USB socket
+    #  swap_xy: true
+    #  mirror_x: true
+    on_touch:
+      then:
+        - if:
+            condition:
+              lambda: 'return !id(screen_active);'
+            then:
+              - light.turn_on:
+                  id: display_backlight
+                  brightness: 80%
+                  transition_length: 200ms
+              - delay: 350ms
+              - lvgl.widget.show:
+                  id: display_time
+              - lvgl.page.show: main_page
+              - lambda: |-
+                  id(screen_active) = true;
+        - script.execute: inactivity_timer
+        
+lvgl:
+  style_definitions:
+    - id: numpad_btn
+      bg_color: 0x373734
+      border_color: 0x373734
+      border_width: 1
+      border_opa: 50%
+      shadow_opa: TRANSP
+      shadow_width: 0
+      radius: 28
+      width: 56
+      height: 56
+
+    - id: numpad_label
+      text_color: 0xc8c4ff
+      text_font: montserrat_22
+
+    - id: clear_btn
+      bg_color: 0x1a0f0f
+      border_color: 0x742a2a
+      border_width: 1
+      border_opa: 50%
+      shadow_opa: TRANSP
+      shadow_width: 0
+      radius: 25
+      width: 110
+      height: 35
+
+    - id: clear_label
+      text_color: 0xfc8181
+      text_font: montserrat_14
+    - id: garage_btn_style
+      width: 70
+      height: 70
+      radius: 35
+      bg_color: ${theme_color_inactive}
+      border_color: 0x2a2840
+      border_width: 1
+      border_opa: 50%
+      shadow_opa: TRANSP
+      shadow_width: 0
+    # One slat of the garage roller-door curtain (same look as the 10.1" panel)
+    - id: garage_slat
+      width: 100%
+      height: 10
+      radius: 1
+      border_width: 0
+      pad_all: 0
+      bg_color: 0x667386
+      bg_grad_color: 0x414D60
+      bg_grad_dir: VER
+
+  buffer_size: 100%
+  top_layer:
+    y: 0
+    height: 34
+    widgets:
+      - label:
+          id: security_label
+          x: 8
+          y: 2
+          text: "\U000F0CCB"
+          text_color: ${security_color_disarm}
+          text_font: icon_font_20
+      - label:
+          id: wifi_icon_label
+          x: 415
+          y: 2
+          text: "\U000F0928"
+          text_color: ${theme_color_secondary}
+          text_font: icon_font_20
+      - label:
+          id: wifi_db_label
+          x: 440
+          y: 4
+          text: "--%"
+          text_color: ${theme_color_secondary}
+          text_font: montserrat_16
+
+      # ======CLOCK DISPLAY (Top-center)
+      - label:
+          text: "--:--"
+          id: display_time
+          align: top_mid
+          x: 0
+          y: 4
+          text_align: center
+          text_color: ${theme_color_secondary}
+          text_font: montserrat_16
+      
+  pages:
+    - id: main_page
+      widgets:
+        # TAB VIEW (MAIN UI)
+        - tabview:
+            id: main_tabs
+            position: bottom
+            y: 0
+            pad_top: 34
+            height: 480
+            bg_color: 0x050505
+            bg_opa: cover
+            scrollbar_mode: "off"
+            scrollable: False
+            scroll_dir: "none"
+
+            tab_style:
+              bg_color: 0x0b0a09
+              bg_opa: cover
+              border_side: top
+              border_color: 0x373734
+              border_width: 1
+              height: 50
+              items:
+                text_color: 0xeeeeee
+                text_font: montserrat_20
+                checked:
+                  text_color: ${theme_color_primary}
+                  bg_color: 0x1a1816
+                  bg_opa: 100%
+                  #border bottom style
+                  border_side: BOTTOM
+                  border_color: ${theme_color_primary}
+                  border_width: 4
+
+            tabs:
+              # Tab 1 - GARAGE
+              - name: "Garage"
+                id: tab_garage
+                width: 100%
+                text_font: icon_font_80
+                bg_image_src: garage_bg
+                #bg_color: 0x050505
+                #bg_opa: 60%
+                scrollable: False
+                scrollbar_mode: "off"
+                scroll_dir: "none"
+                widgets:
+                  - button: #light switch Garage
+                      id: light_switch
+                      align: BOTTOM_LEFT
+                      x: 20
+                      y: -130
+                      width: 60
+                      height: 200
+                      radius: 26
+                      bg_color: 0x2a2a2a
+                      bg_opa: cover
+                      border_width: 0
+                      shadow_opa: TRANSP
+                      shadow_width: 0
+                      on_click:
+                        - homeassistant.action:
+                            action: light.toggle
+                            data:
+                              entity_id: ${light1}
+
+                      widgets:
+                        - obj:
+                            id: light_switch_fill
+                            align: TOP_MID
+                            y: -10
+                            width: 60
+                            height: 0          # starts hidden
+                            bg_color: 0xFF8C00
+                            bg_opa: COVER
+                            border_width: 0
+                            radius: 26
+                            pad_all: 0
+                            on_click:
+                              - homeassistant.action:
+                                  action: light.toggle
+                                  data:
+                                    entity_id: ${light1}
+                        - label:
+                            id: bulb_icon_garage
+                            text: "\U000F17C7"
+                            align: TOP_MID
+                            y: 5
+                            text_font: icon_font_40
+                            text_color: 0x888888
+                        - label:
+                            id: bulb_label_garage
+                            text: "Garage"
+                            align: CENTER
+                            y: -10
+                            text_font: montserrat_14
+                            text_color: 0x888888
+
+                  # garage_door_draw sets the curtain height to the closed share of the door (100 - position %); the slats stay at the
+                  # bottom edge, so a shorter curtain looks like the door rolling up. The frame clips it.
+                  - label:
+                      text: "Roller Door"
+                      align: TOP_MID
+                      text_font: montserrat_16
+                      text_color: 0xeeeeee
+                      y: 10
+
+                  - obj:
+                      id: garage_position_container
+                      align: CENTER
+                      y: -60
+                      width: 220
+                      height: 160
+                      radius: 8
+                      bg_color: 0x222B38
+                      bg_opa: cover
+                      border_color: 0x3A4658
+                      border_width: 2
+                      pad_all: 0
+                      scrollable: false
+                      widgets:
+                        - obj:
+                            id: garage_door_curtain
+                            align: TOP_MID
+                            width: 100%
+                            height: 100%
+                            bg_opa: TRANSP
+                            border_width: 0
+                            radius: 0
+                            pad_all: 0
+                            scrollable: false
+                            layout:
+                              type: flex
+                              flex_flow: COLUMN
+                              flex_align_main: END
+                              flex_align_cross: CENTER
+                              pad_row: 3
+                            widgets:   # 12 x 10 px slats + 3 px gaps fill the 156 px frame
+                              - obj: {styles: garage_slat}
+                              - obj: {styles: garage_slat}
+                              - obj: {styles: garage_slat}
+                              - obj: {styles: garage_slat}
+                              - obj: {styles: garage_slat}
+                              - obj: {styles: garage_slat}
+                              - obj: {styles: garage_slat}
+                              - obj: {styles: garage_slat}
+                              - obj: {styles: garage_slat}
+                              - obj: {styles: garage_slat}
+                              - obj: {styles: garage_slat}
+                              - obj: {styles: garage_slat}
+
+                  - label:
+                      id: garage_pct_label
+                      text: "--%"
+                      text_font: montserrat_48
+                      align: CENTER
+                      y: 70
+                      text_color: 0xeeeeee
+
+                  - button:
+                      id: light_switch_living
+                      align: BOTTOM_RIGHT
+                      x: -20
+                      y: -130
+                      width: 60
+                      height: 200
+                      radius: 26
+                      bg_color: 0x2a2a2a
+                      bg_opa: cover
+                      border_width: 0
+                      shadow_opa: TRANSP
+                      shadow_width: 0
+                      on_click:
+                        - homeassistant.action:
+                            action: light.toggle
+                            data:
+                              entity_id: ${light2}
+                      widgets:
+                        - obj:
+                            id: light_switch_living_fill
+                            align: TOP_MID
+                            y: -10
+                            width: 60
+                            height: 0
+                            bg_color: 0xFF8C00
+                            bg_opa: COVER
+                            border_width: 0
+                            radius: 26
+                            pad_all: 0
+                            on_click:
+                              - homeassistant.action:
+                                  action: light.toggle
+                                  data:
+                                    entity_id: ${light2}
+                        - label:
+                            id: bulb_icon_living
+                            text: "\U000F17C7"
+                            align: TOP_MID
+                            y: 5
+                            text_font: icon_font_40
+                            text_color: 0x888888
+                        - label:
+                            id: bulb_label_living1
+                            text: "Living"
+                            align: CENTER
+                            y: -10
+                            text_font: montserrat_14
+                            text_color: 0x888888
+                        - label:
+                            id: bulb_label_living2
+                            text: "Room"
+                            align: CENTER
+                            y: 10
+                            text_font: montserrat_14
+                            text_color: 0x888888
+
+                  - button: #btn_up
+                      id: btn_up
+                      align: BOTTOM_LEFT
+                      x: 15
+                      y: -15
+                      styles: garage_btn_style
+                      pressed: #change on press.
+                        bg_color: 0x000000
+                        bg_opa: 60%
+                      on_click:
+                        - script.execute: send_cmd_up
+                        #- homeassistant.action:
+                        #    action: button.press
+                        #    data:
+                        #      entity_id: ${garage_up}
+                      widgets:
+                        - label:
+                            text: "\U000F0143"
+                            align: CENTER
+                            text_font: icon_font_40
+
+                  - button: #button stop
+                      id: btn_stop
+                      align: BOTTOM_MID
+                      y: -15
+                      styles: garage_btn_style
+                      pressed: #change on press.
+                        bg_color: 0x000000
+                        bg_opa: 60%
+                      on_click:
+                        - script.execute: send_cmd_stop
+                        #- homeassistant.action:
+                        #    action: button.press
+                        #    data:
+                        #      entity_id: ${garage_stop}
+                      widgets:
+                        - label:
+                            text: "STOP"
+                            align: CENTER
+                            text_font: montserrat_16
+
+                  - button: #button down
+                      id: btn_down
+                      align: BOTTOM_RIGHT
+                      x: -15
+                      y: -15
+                      styles: garage_btn_style
+                      pressed: #change on press.
+                        bg_color: 0x000000
+                        bg_opa: 60%
+                      on_click:
+                        - script.execute: send_cmd_down
+                        #- homeassistant.action:
+                        #    action: button.press
+                        #    data:
+                        #      entity_id: ${garage_down}
+                      widgets:
+                        - label:
+                            text: "\U000F0140"
+                            align: CENTER
+                            text_font: icon_font_40
+
+              # Tab 2 - SCENE
+              - name: "Scene"
+                id: tab_scene
+                scrollbar_mode: "off"
+                scroll_dir: "none"
+                scrollable: False
+                width: 100%
+                bg_image_src: garage_bg
+                #bg_color: 0x050505
+                #bg_opa: 60%
+                pad_bottom: 5
+                pad_left: 5
+                pad_right: 5
+                widgets:
+                  - button: #away home button
+                      id: away_home_btn
+                      align: CENTER
+                      x: -110
+                      y: -80
+                      width: 190
+                      height: 140
+                      bg_color: 0x2196F3
+                      bg_grad_color: 0x2ECC71
+                      bg_grad_dir: VER
+                      bg_opa: COVER
+                      border_color: 0x2196F3
+                      border_width: 1
+                      border_opa: 50%
+                      shadow_opa: TRANSP
+                      shadow_width: 0
+                      pressed: #change on press.
+                        bg_color: 0x000000
+                        bg_opa: 60%
+                      on_click:
+                        - homeassistant.action:
+                            action: scene.turn_on
+                            data:
+                              entity_id: ${scene1}
+                      widgets:
+                        - label:
+                            text: "\U000F0F9B"
+                            text_color: 0xffffff
+                            text_font: icon_font_80
+                            align: LEFT_MID
+                        - label:
+                            text: "Away"
+                            text_color: 0xffffff
+                            text_font: montserrat_20
+                            align: RIGHT_MID
+                            y: -10
+                            pad_left: 20
+                        - label:
+                            text: "Home"
+                            text_color: 0xffffff
+                            text_font: montserrat_20
+                            align: RIGHT_MID
+                            y: 15
+                            pad_left: 20
+
+                  - button: #back home button
+                      id: back_home_btn
+                      align: CENTER
+                      x: 110
+                      y: -80
+                      width: 190
+                      height: 140
+                      bg_color: 0x2ECC71
+                      bg_grad_color: 0xFFD60A
+                      bg_grad_dir: VER
+                      border_color: 0x2ECC71
+                      border_width: 1
+                      border_opa: 50%
+                      shadow_opa: TRANSP
+                      shadow_width: 0
+                      pressed: #change on press.
+                        bg_color: 0x000000
+                        bg_opa: 60%
+                      on_click:
+                        - homeassistant.action:
+                            action: scene.turn_on
+                            data:
+                              entity_id: ${scene2}
+                      widgets:
+                        - label:
+                            text: "\U000F0F9C"
+                            text_color: 0xffffff
+                            text_font: icon_font_80
+                            align: LEFT_MID
+                        - label:
+                            text: "Back"
+                            text_color: 0xffffff
+                            text_font: montserrat_20
+                            align: RIGHT_MID
+                            y: -10
+                            pad_left: 20
+                        - label:
+                            text: "Home"
+                            text_color: 0xffffff
+                            text_font: montserrat_20
+                            align: RIGHT_MID
+                            y: 15
+                            pad_left: 20
+
+              # Tab 3 - ALARM (unchanged content continues...)
+              - name: "Alarm"
+                id: tab_alarm
+                scrollbar_mode: "off"
+                scroll_dir: "none"
+                scrollable: False
+                width: 100%
+                bg_image_src: garage_bg
+                bg_color: 0x050505
+                bg_opa: 60%
+                pad_bottom: 5
+                pad_left: 5
+                pad_right: 5
+                widgets:
+                  - label:
+                      id: alarm_label
+                      text: "Status: LOADING..."
+                      align: TOP_MID
+                      text_color: 0xc8c4ff
+                      text_font: montserrat_16
+
+                  # ── Action row ──────────────────────────────
+                  - button:
+                      id: btn_arm_away
+                      x: 55
+                      y: 25
+                      width: 110
+                      height: 35
+                      radius: 25
+                      bg_color: 0x221a08
+                      border_color: 0x6b4f0a
+                      border_width: 1
+                      border_opa: 50%
+                      shadow_opa: TRANSP
+                      shadow_width: 0
+                      on_click:
+                        - homeassistant.action:
+                            action: alarm_control_panel.alarm_arm_away
+                            data:
+                              entity_id: ${alarmo_id}
+                              code: !lambda return id(current_pin).c_str();
+                        - lambda: id(current_pin) = "";
+                      widgets:
+                        - label:
+                            text: "Arm Away"
+                            text_color: 0xFF8C00
+                            text_font: montserrat_16
+                            align: CENTER
+
+                  - label:
+                      id: pin_display
+                      text: "----"
+                      align: TOP_MID
+                      y: 37
+                      text_font: montserrat_22
+                      text_color: 0xbbbbbb
+
+                  - button:
+                      id: btn_arm_night
+                      x: 305
+                      y: 25
+                      width: 110
+                      height: 35
+                      radius: 25
+                      bg_color: 0x221a08
+                      border_color: 0x6b4f0a
+                      border_width: 1
+                      border_opa: 50%
+                      shadow_opa: TRANSP
+                      shadow_width: 0
+                      on_click:
+                        - homeassistant.action:
+                            action: alarm_control_panel.alarm_arm_night
+                            data:
+                              entity_id: ${alarmo_id}
+                              code: !lambda return id(current_pin).c_str();
+                        - lambda: id(current_pin) = "";
+                      widgets:
+                        - label:
+                            text: "Cat Away"
+                            text_color: 0xFF8C00
+                            text_font: montserrat_16
+                            align: CENTER
+
+                  # ── Numpad Row 1 ──────────────────────────────
+                  - button:  #1
+                      styles: numpad_btn
+                      x: ${numpad_x1}
+                      y: ${numpad_y1}
+                      on_click:
+                        - script.execute: increment_digit_1
+                        - script.execute: inactivity_timer
+                      widgets:
+                        - label:
+                            text: "1"
+                            text_color: 0xc8c4ff
+                            text_font: montserrat_22
+                            align: CENTER
+
+                  - button:  #2
+                      x: ${numpad_x2}
+                      y: ${numpad_y1}
+                      styles: numpad_btn
+                      on_click:
+                        - script.execute: increment_digit_2
+                        - script.execute: inactivity_timer
+                      widgets:
+                        - label:
+                            text: "2"
+                            text_color: 0xc8c4ff
+                            text_font: montserrat_22
+                            align: CENTER
+
+                  - button:
+                      x: ${numpad_x3}
+                      y: ${numpad_y1}
+                      styles: numpad_btn
+                      on_click:
+                        - script.execute: increment_digit_3
+                        - script.execute: inactivity_timer
+                      widgets:
+                        - label:
+                            text: "3"
+                            text_color: 0xc8c4ff
+                            text_font: montserrat_22
+                            align: CENTER
+
+                  # ── Numpad Row 2 ──────────────────────────────
+                  - button:
+                      x: ${numpad_x1}
+                      y: ${numpad_y2}
+                      styles: numpad_btn
+                      on_click:
+                        - script.execute: increment_digit_4
+                        - script.execute: inactivity_timer
+                      widgets:
+                        - label:
+                            text: "4"
+                            text_color: 0xc8c4ff
+                            text_font: montserrat_22
+                            align: CENTER
+
+                  - button:
+                      x: ${numpad_x2}
+                      y: ${numpad_y2}
+                      styles: numpad_btn
+                      on_click:
+                        - script.execute: increment_digit_5
+                        - script.execute: inactivity_timer
+                      widgets:
+                        - label:
+                            text: "5"
+                            text_color: 0xc8c4ff
+                            text_font: montserrat_22
+                            align: CENTER
+
+                  - button:
+                      x: ${numpad_x3}
+                      y: ${numpad_y2}
+                      styles: numpad_btn
+                      on_click:
+                        - script.execute: increment_digit_6
+                        - script.execute: inactivity_timer
+                      widgets:
+                        - label:
+                            text: "6"
+                            text_color: 0xc8c4ff
+                            text_font: montserrat_22
+                            align: CENTER
+
+                  # ── Numpad Row 3 ──────────────────────────────
+                  - button: #7
+                      x: ${numpad_x1}
+                      y: ${numpad_y3}
+                      styles: numpad_btn
+                      on_click:
+                        - script.execute: increment_digit_7
+                        - script.execute: inactivity_timer
+                      widgets:
+                        - label:
+                            text: "7"
+                            text_color: 0xc8c4ff
+                            text_font: montserrat_22
+                            align: CENTER
+
+                  - button: #8
+                      x: ${numpad_x2}
+                      y: ${numpad_y3}
+                      styles: numpad_btn
+                      on_click:
+                        - script.execute: increment_digit_8
+                        - script.execute: inactivity_timer
+                      widgets:
+                        - label:
+                            text: "8"
+                            text_color: 0xc8c4ff
+                            text_font: montserrat_22
+                            align: CENTER
+
+                  - button: # 9
+                      x: ${numpad_x3}
+                      y: ${numpad_y3}
+                      styles: numpad_btn
+                      on_click:
+                        - script.execute: increment_digit_9
+                        - script.execute: inactivity_timer
+                      widgets:
+                        - label:
+                            text: "9"
+                            text_color: 0xc8c4ff
+                            text_font: montserrat_22
+                            align: CENTER
+                  # ── Numpad Row 4 ────
+                  - button: #clear
+                      x: 55
+                      y: 325
+                      width: 110
+                      height: 35
+                      radius: 25
+                      bg_color: 0x1a0f0f
+                      border_color: 0x742a2a
+                      border_width: 1
+                      border_opa: 50%
+                      shadow_opa: TRANSP
+                      shadow_width: 0
+                      on_click:
+                        - lambda: id(current_pin) = "";
+                        - script.execute: inactivity_timer
+                      widgets:
+                        - label:
+                            text: "Clear"
+                            text_color: 0xfc8181
+                            text_font: montserrat_16
+                            align: CENTER
+
+                  - button:
+                      x: ${numpad_x2}
+                      y: ${numpad_y4}
+                      styles: numpad_btn
+                      on_click:
+                        - script.execute: increment_digit_0
+                        - script.execute: inactivity_timer
+                      widgets:
+                        - label:
+                            text: "0"
+                            text_color: 0xc8c4ff
+                            text_font: montserrat_22
+                            align: CENTER
+                  - button: #Disarm
+                      id: btn_disarm
+                      x: 315
+                      y: 325
+                      width: 110
+                      height: 35
+                      radius: 25
+                      bg_color: 0x0a1f12
+                      border_color: 0x1f6b3a
+                      border_width: 1
+                      border_opa: 50%
+                      shadow_opa: TRANSP
+                      shadow_width: 0
+                      on_click:
+                        - homeassistant.action:
+                            action: alarm_control_panel.alarm_disarm
+                            data:
+                              entity_id: ${alarmo_id}
+                              code: !lambda return id(current_pin).c_str();
+                        - lambda: id(current_pin) = "";
+                        - script.execute: inactivity_timer
+                      widgets:
+                        - label:
+                            text: "Disarm"
+                            text_color: 0x42f591
+                            text_font: montserrat_16
+                            align: CENTER
+    - id: idle_page
+      bg_color: 0x000000
+      bg_opa: COVER
+      bg_image_src: idle_bg
+      bg_image_opa: COVER
+      widgets:
+        # AM / PM
+        - label:
+            id: lbl_ampm
+            x: 55
+            y: 80
+            text_font: font_ampm
+            text_color: ${theme_color_secondary}
+
+        # Hour & Minute
+        - label:
+            id: lbl_hour
+            x: 70
+            y: 100
+            text_font: font_time_large
+            text_color: ${theme_color_primary}
+
+        - label:
+            id: lbl_min
+            x: 70
+            y: 220   # control spacing manually
+            text_font: font_time_large
+            text_color: ${theme_color_primary}
+
+        # Day
+        - label:
+            id: lbl_day
+            x: 60
+            y: 345
+            text_font: font_day
+            text_color: ${theme_color_primary}
+
+        # Date
+        - label:
+            id: lbl_date
+            x: 60
+            y: 387
+            text_font: font_date
+            text_color: ${theme_color_secondary}
+
+        ##weather data at bottom:
+        # ═════ TODAY ═════════
+        - label:
+            id: idle_wx_today_label
+            x: 20
+            y: -26
+            text: "TODAY"
+            align: BOTTOM_LEFT
+            text_color: ${theme_color_primary}
+            text_font: montserrat_14
+
+        - label:
+            id: idle_wx_today_temps
+            x: 20
+            y: -2
+            text: "-- / --°C"
+            align: BOTTOM_LEFT
+            text_color: ${theme_color_primary}
+            text_font: montserrat_20
+
+        # ══════════════ TOMORROW ═════════════════════════
+        - label:
+            id: idle_wx_tmr_label
+            y: -26
+            align: BOTTOM_MID
+            text: "TOMORROW"
+            text_color: 0xCCCCCC
+            text_font: montserrat_14
+
+        - label:
+            id: idle_wx_tmr_temps
+            y: -2
+            text: "-- / --°C"
+            align: BOTTOM_MID
+            text_color: 0xCCCCCC
+            text_font: montserrat_20
+
+        # ══════════════ DAY AFTER ════════════════════════
+        - label:
+            id: idle_wx_day2_label
+            x: -10
+            y: -26
+            align: BOTTOM_RIGHT
+            text: "DAY AFTER"
+            text_color: 0xCCCCCC
+            text_font: montserrat_14
+
+        - label:
+            id: idle_wx_day2_temps
+            x: -10
+            y: -2
+            align: BOTTOM_RIGHT
+            text: "-- / --°C"
+            text_color: 0xCCCCCC
+            text_font: montserrat_20
+script:
+  # Garage roller door picture: curtain height = closed share of the door
+  # (position 100 % = fully open, no slats; 0 % = closed, frame full) and
+  # the percentage under it.
+  - id: garage_door_draw
+    parameters:
+      pos: int
+    then:
+      - lambda: |-
+          int p = pos;
+          if (p < 0) p = 0;
+          if (p > 100) p = 100;
+          const int full = lv_obj_get_content_height(id(garage_position_container));
+          lv_obj_set_height(id(garage_door_curtain), full * (100 - p) / 100);
+          char buf[8];
+          snprintf(buf, sizeof(buf), "%d%%", p);
+          lv_label_set_text(id(garage_pct_label), buf);
+
+  - id: inactivity_timer
+    mode: restart
+    then:
+      - delay: 44s
+      - lambda: |-
+          id(screen_active) = false;
+
+      # Show idle page
+      - lvgl.page.show: idle_page
+      # Now handle backlight — one clean decision, no pre-check
+      - if:
+          condition:
+            lambda: |-
+              auto t = id(ha_time).now();
+              int start_h = (int) id(display_off_start).state;
+              int end_h   = (int) id(display_off_end).state;
+              if (start_h > end_h) {
+                return (t.hour >= start_h || t.hour < end_h);
+              } else {
+                return (t.hour >= start_h && t.hour < end_h);
+              }
+          then:
+            # Night window — turn off completely
+            - light.turn_off:
+                id: display_backlight
+          else:
+            # Daytime — dim to 35% for idle
+            - light.turn_on:
+                id: display_backlight
+                brightness: 38%
+            - lvgl.widget.hide:
+                id: display_time
+
+  #Alarmo code
+  - id: increment_digit_1
+    then:
+      - lambda: |-
+          if (id(current_pin).length() < 10) { id(current_pin) += "1";}
+          ESP_LOGD("increment_digit_1", "Current PIN: %s", id(current_pin).c_str());
+
+  - id: increment_digit_2
+    then:
+      - lambda: |-
+          if (id(current_pin).length() < 10) { id(current_pin) += "2";}
+          ESP_LOGD("increment_digit_2", "Current PIN: %s", id(current_pin).c_str());
+
+  - id: increment_digit_3
+    then:
+      - lambda: |-
+          if (id(current_pin).length() < 10) { id(current_pin) += "3";}
+          ESP_LOGD("increment_digit_3", "Current PIN: %s", id(current_pin).c_str());
+
+  - id: increment_digit_4
+    then:
+      - lambda: |-
+          if (id(current_pin).length() < 10) { id(current_pin) += "4";}
+          ESP_LOGD("increment_digit_4", "Current PIN: %s", id(current_pin).c_str());
+
+  - id: increment_digit_5
+    then:
+      - lambda: |-
+          if (id(current_pin).length() < 10) { id(current_pin) += "5";}
+          ESP_LOGD("increment_digit_5", "Current PIN: %s", id(current_pin).c_str());
+
+  - id: increment_digit_6
+    then:
+      - lambda: |-
+          if (id(current_pin).length() < 10) { id(current_pin) += "6";}
+          ESP_LOGD("increment_digit_6", "Current PIN: %s", id(current_pin).c_str());
+
+  - id: increment_digit_7
+    then:
+      - lambda: |-
+          if (id(current_pin).length() < 10) { id(current_pin) += "7"; }
+          ESP_LOGD("increment_digit_7", "Current PIN: %s", id(current_pin).c_str());
+
+  - id: increment_digit_8
+    then:
+      - lambda: |-
+          if (id(current_pin).length() < 10) { id(current_pin) += "8";}
+          ESP_LOGD("increment_digit_8", "Current PIN: %s", id(current_pin).c_str());
+
+  - id: increment_digit_9
+    then:
+      - lambda: |-
+          if (id(current_pin).length() < 10) { id(current_pin) += "9";}
+          ESP_LOGD("increment_digit_9", "Current PIN: %s", id(current_pin).c_str());
+
+  - id: increment_digit_0
+    then:
+      - lambda: |-
+          if (id(current_pin).length() < 10) { id(current_pin) += "0";}
+          ESP_LOGD("increment_digit_0", "Current PIN: %s", id(current_pin).c_str());
+
+  - id: garage_btn_check
+    then:
+      - if:
+          condition:
+            binary_sensor.is_on: garage_up_allowed
+          then:
+            - lvgl.widget.enable: btn_up
+            - lvgl.widget.update:
+                id: btn_up
+                bg_color: ${theme_color_primary}
+                bg_opa: cover
+                #Blue bg color
+          else:
+            - lvgl.widget.disable: btn_up
+            - lvgl.widget.update:
+                id: btn_up
+                bg_color: ${theme_color_inactive}
+                bg_opa: cover
+                #Grey bg color
+
+      - if:
+          condition:
+            binary_sensor.is_on: garage_stop_allowed
+          then:
+            - lvgl.widget.enable: btn_stop
+            - lvgl.widget.update:
+                id: btn_stop
+                bg_color: ${theme_color_primary}
+                bg_opa: cover
+          else:
+            - lvgl.widget.disable: btn_stop
+            - lvgl.widget.update:
+                id: btn_stop
+                bg_color: ${theme_color_inactive}
+                bg_opa: cover
+      - if:
+          condition:
+            binary_sensor.is_on: garage_down_allowed
+          then:
+            - lvgl.widget.enable: btn_down
+            - lvgl.widget.update:
+                id: btn_down
+                bg_color: ${theme_color_primary}
+                bg_opa: cover
+          else:
+            - lvgl.widget.disable: btn_down
+            - lvgl.widget.update:
+                id: btn_down
+                bg_color: ${theme_color_inactive}
+                bg_opa: cover
+
+  - id: living_room_light_check
+    then:
+      - if:
+          condition:
+            binary_sensor.is_on: light_state_living_room
+          then:
+            - lvgl.widget.update:
+                id: light_switch_living
+                bg_color: 0xFF8C00        # on: orange background
+                bg_opa: cover
+            - lvgl.label.update:
+                id: bulb_icon_living
+                text_color: 0xFFFFFF
+            - lvgl.label.update:
+                id: bulb_label_living1
+                text_color: 0xFFFFFF
+            - lvgl.label.update:
+                id: bulb_label_living2
+                text_color: 0xFFFFFF
+   
+          else:
+            - lvgl.widget.update:
+                id: light_switch_living
+                bg_color: 0x2a2a2a
+                bg_opa: cover
+            - lvgl.label.update: 
+                id: bulb_icon_living
+                text_color: 0x888888
+            - lvgl.label.update:
+                id: bulb_label_living1
+                text_color: 0x888888
+            - lvgl.label.update:
+                id: bulb_label_living2
+                text_color: 0x888888
+  # Send espnow command with retry
+  - id: send_cmd_up
+    mode: restart
+    then:
+      - globals.set: {id: ack_up, value: 'false'}
+      - repeat:
+          count: 3
+          then:
+            - if:
+                condition:
+                  lambda: 'return !id(ack_up);'
+                then:
+                  - binary_sensor.template.publish: {id: cmd_up, state: ON}
+                  - delay: 200ms
+                  - binary_sensor.template.publish: {id: cmd_up, state: OFF}
+                  - wait_until:
+                      timeout: 350ms
+                      condition:
+                        lambda: 'return id(ack_up);'
+
+  - id: send_cmd_stop
+    mode: restart
+    then:
+      - globals.set: {id: ack_stop, value: 'false'}
+      - repeat:
+          count: 3
+          then:
+            - if:
+                condition:
+                  lambda: 'return !id(ack_stop);'
+                then:
+                  - binary_sensor.template.publish: {id: cmd_stop, state: ON}
+                  - delay: 200ms
+                  - binary_sensor.template.publish: {id: cmd_stop, state: OFF}
+                  - wait_until:
+                      timeout: 350ms
+                      condition:
+                        lambda: 'return id(ack_stop);'
+
+  - id: send_cmd_down
+    mode: restart
+    then:
+      - globals.set: {id: ack_down, value: 'false'}
+      - repeat:
+          count: 3
+          then:
+            - if:
+                condition:
+                  lambda: 'return !id(ack_down);'
+                then:
+                  - binary_sensor.template.publish: {id: cmd_down, state: ON}
+                  - delay: 200ms
+                  - binary_sensor.template.publish: {id: cmd_down, state: OFF}
+                  - wait_until:
+                      timeout: 350ms
+                      condition:
+                        lambda: 'return id(ack_down);'
+globals:
+  - id: current_pin
+    type: std::string
+    initial_value: ""
+
+  - id: screen_active
+    type: bool
+    initial_value: "false"
+  
+  - id: blink_on #used for security_label when it's armed.
+    type: bool
+    restore_value: false
+    initial_value: "false"
+  # ...existing globals...
+  - id: ack_up
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: ack_stop
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: ack_down
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+    
+text_sensor:
+  - platform: homeassistant
+    name: "Alarm Status"
+    entity_id: ${alarmo_id}
+    id: alarm_status
+    on_value:
+      - lvgl.label.update:
+          id: alarm_label
+          text: !lambda |-
+            auto s = id(alarm_status).state;
+            if (s == "disarmed")            return {"Status: Disarmed"};
+            if (s == "arming")              return {"Status: Arming"};
+            if (s == "armed_away")          return {"Status: Armed Away"};
+            if (s == "armed_home")          return {"Status: Armed Home"};
+            if (s == "armed_night")         return {"Status: Armed Night"};
+            if (s == "armed_vacation")      return {"Status: Armed Vacation"};
+            if (s == "armed_custom_bypass") return {"Status: Armed Custom"};
+            if (s == "pending")             return {"Status: Pending"};
+            if (s == "triggered")           return {"Status: Triggered"};
+            if (s == "unavailable")         return {"Status: Unavailable"};
+            return {"Status: Unknown"};
+      - lvgl.label.update:
+          id: alarm_label
+          text_color: !lambda |-
+            auto s = id(alarm_status).state;
+            if (s == "disarmed")            return lv_color_hex(0x00E676); // Green
+            if (s == "arming")              return lv_color_hex(0xFFD600); // Amber
+            if (s == "armed_away")          return lv_color_hex(0xFF6D00); // Orange
+            if (s == "armed_home")          return lv_color_hex(0xFF9100); // Light orange
+            if (s == "armed_night")         return lv_color_hex(0x7C4DFF); // Purple
+            if (s == "armed_vacation")      return lv_color_hex(0x00B0FF); // Sky blue
+            if (s == "armed_custom_bypass") return lv_color_hex(0x00BCD4); // Cyan
+            if (s == "pending")             return lv_color_hex(0xFFAB00); // Yellow-orange
+            if (s == "triggered")           return lv_color_hex(0xFF1744); // Red
+            return lv_color_hex(0x9E9E9E);  // Grey for unavailable/unknown
+      - lvgl.label.update:
+          id: security_label
+          text_color: !lambda |-
+            auto s = id(alarm_status).state;
+            if (s == "disarmed"){
+              return lv_color_hex(0x00E676); // Green
+            } else {
+              return lv_color_hex(0xE81744); // Red
+            }        
+binary_sensor:
+  - platform: homeassistant
+    id: garage_up_allowed
+    entity_id: binary_sensor.garage_roller_door_garage_next_is_up
+    on_state:
+      - if:
+          condition:
+            binary_sensor.is_on: garage_up_allowed
+          then:
+            - lvgl.widget.enable: btn_up
+            - lvgl.widget.update:
+                id: btn_up
+                bg_color: ${theme_color_primary}
+                bg_opa: cover
+                #Blue bg color
+          else:
+            - lvgl.widget.disable: btn_up
+            - lvgl.widget.update:
+                id: btn_up
+                bg_color: ${theme_color_inactive}
+                bg_opa: cover
+                #Grey bg color
+
+  - platform: homeassistant
+    id: garage_stop_allowed
+    entity_id: binary_sensor.garage_roller_door_garage_next_is_stop
+    on_state:
+      - if:
+          condition:
+            binary_sensor.is_on: garage_stop_allowed
+          then:
+            - lvgl.widget.enable: btn_stop
+            - lvgl.widget.update:
+                id: btn_stop
+                bg_color: ${theme_color_primary}
+                bg_opa: cover
+          else:
+            - lvgl.widget.disable: btn_stop
+            - lvgl.widget.update:
+                id: btn_stop
+                bg_color: ${theme_color_inactive}
+                bg_opa: cover
+
+  - platform: homeassistant
+    id: garage_down_allowed
+    entity_id: binary_sensor.garage_roller_door_garage_next_is_down
+    on_state:
+      - if:
+          condition:
+            binary_sensor.is_on: garage_down_allowed
+          then:
+            - lvgl.widget.enable: btn_down
+            - lvgl.widget.update:
+                id: btn_down
+                bg_color: ${theme_color_primary}
+                bg_opa: cover
+          else:
+            - lvgl.widget.disable: btn_down
+            - lvgl.widget.update:
+                id: btn_down
+                bg_color: ${theme_color_inactive}
+                bg_opa: cover
+
+  - platform: template
+    id: relay1_state
+    lambda: return id(relay1).state;
+    on_press:
+      - lvgl.label.update:
+          id: bulb_icon_garage
+          #text_color: 0xFFFFFF      # on: white icon
+      - lvgl.label.update:
+          id: bulb_label_garage
+          #text_color: 0xFFFFFF      # on: white text
+      # BG animation on relay1, uncomment if ralay1 is connected.
+      - lambda: |-
+          //lv_obj_t *fill = id(light_switch_fill);
+          //lv_anim_t a;
+          //lv_anim_init(&a);
+          //lv_anim_set_exec_cb(&a, [](void *obj, int32_t v) {
+          //  lv_obj_set_height((lv_obj_t *)obj, v);
+          //});
+          //lv_anim_set_var(&a, fill);
+          //lv_anim_set_values(&a, lv_obj_get_height(fill), 200);
+          //lv_anim_set_duration(&a, 300);
+          //lv_anim_set_path_cb(&a, lv_anim_path_ease_in_out);
+          //lv_anim_start(&a);
+
+    on_release:
+      - lvgl.label.update:
+          id: bulb_icon_garage
+          #text_color: 0x888888      # off: grey icon
+      - lvgl.label.update:
+          id: bulb_label_garage
+          #text_color: 0x888888      # off: grey text
+      # Lambda to achive buble card style light.
+      - lambda: |-
+          //lv_obj_t *fill = id(light_switch_fill);
+          //lv_anim_t a;
+          //lv_anim_init(&a);
+          //lv_anim_set_exec_cb(&a, [](void *obj, int32_t v) {
+          //  lv_obj_set_height((lv_obj_t *)obj, v);
+          //});
+          //lv_anim_set_var(&a, fill);
+          //lv_anim_set_values(&a, lv_obj_get_height(fill), 0);
+          //lv_anim_set_duration(&a, 300);
+          //lv_anim_set_path_cb(&a, lv_anim_path_ease_in_out);
+          //lv_anim_start(&a);
+
+  - platform: homeassistant
+    id: light_state_garage
+    entity_id: ${light1}
+    on_state:
+      - if:
+          condition:
+            binary_sensor.is_on: light_state_garage
+          then:
+            - lambda: |-
+                lv_obj_t *fill = id(light_switch_fill);
+                lv_anim_t a;
+                lv_anim_init(&a);
+                lv_anim_set_exec_cb(&a, [](void *obj, int32_t v) {
+                  lv_obj_set_height((lv_obj_t *)obj, v);
+                });
+                lv_anim_set_var(&a, fill);
+                lv_anim_set_values(&a, lv_obj_get_height(fill), 200);
+                lv_anim_set_duration(&a, 300);
+                lv_anim_set_path_cb(&a, lv_anim_path_ease_in_out);
+                lv_anim_start(&a);
+            - lvgl.label.update:
+                id: bulb_icon_garage
+                text_color: 0xFFFFFF      # on: white icon
+            - lvgl.label.update:
+                id: bulb_label_garage
+                text_color: 0xFFFFFF
+   
+          else:
+            - lambda: |-
+                lv_obj_t *fill = id(light_switch_fill);
+                lv_anim_t a;
+                lv_anim_init(&a);
+                lv_anim_set_exec_cb(&a, [](void *obj, int32_t v) {
+                  lv_obj_set_height((lv_obj_t *)obj, v);
+                });
+                lv_anim_set_var(&a, fill);
+                lv_anim_set_values(&a, lv_obj_get_height(fill), 0);
+                lv_anim_set_duration(&a, 300);
+                lv_anim_set_path_cb(&a, lv_anim_path_ease_in_out);
+                lv_anim_start(&a);
+            - lvgl.label.update: 
+                id: bulb_icon_garage
+                text_color: 0x888888
+            - lvgl.label.update:
+                id: bulb_label_garage
+                text_color: 0x888888
+
+
+  - platform: homeassistant
+    id: light_state_living_room
+    entity_id: ${light2}
+    on_state:
+      - if:
+          condition:
+            binary_sensor.is_on: light_state_living_room
+          then:
+            #- lvgl.widget.update:
+            #    id: light_switch_living
+            #    bg_color: 0xFF8C00        # on: orange background
+            #    bg_opa: cover
+            - lambda: |-
+                lv_obj_t *fill = id(light_switch_living_fill);
+                lv_anim_t a;
+                lv_anim_init(&a);
+                lv_anim_set_exec_cb(&a, [](void *obj, int32_t v) {
+                  lv_obj_set_height((lv_obj_t *)obj, v);
+                });
+                lv_anim_set_var(&a, fill);
+                lv_anim_set_values(&a, lv_obj_get_height(fill), 200);
+                lv_anim_set_duration(&a, 300);
+                lv_anim_set_path_cb(&a, lv_anim_path_ease_in_out);
+                lv_anim_start(&a);
+            - lvgl.label.update:
+                id: bulb_icon_living
+                text_color: 0xFFFFFF      # on: white icon
+            - lvgl.label.update:
+                id: bulb_label_living1
+                text_color: 0xFFFFFF
+            - lvgl.label.update:
+                id: bulb_label_living2
+                text_color: 0xFFFFFF
+   
+          else:
+            #- lvgl.widget.update:
+            #    id: light_switch_living
+            #    bg_color: 0x2a2a2a
+            #    bg_opa: cover
+            - lambda: |-
+                lv_obj_t *fill = id(light_switch_living_fill);
+                lv_anim_t a;
+                lv_anim_init(&a);
+                lv_anim_set_exec_cb(&a, [](void *obj, int32_t v) {
+                  lv_obj_set_height((lv_obj_t *)obj, v);
+                });
+                lv_anim_set_var(&a, fill);
+                lv_anim_set_values(&a, lv_obj_get_height(fill), 0);
+                lv_anim_set_duration(&a, 300);
+                lv_anim_set_path_cb(&a, lv_anim_path_ease_in_out);
+                lv_anim_start(&a);
+            - lvgl.label.update: 
+                id: bulb_icon_living
+                text_color: 0x888888
+            - lvgl.label.update:
+                id: bulb_label_living1
+                text_color: 0x888888
+            - lvgl.label.update:
+                id: bulb_label_living2
+                text_color: 0x888888
+  - platform: template
+    id: cmd_up
+    internal: true
+  - platform: template
+    id: cmd_stop
+    internal: true
+  - platform: template
+    id: cmd_down
+    internal: true
+sensor:
+  - platform: homeassistant
+    id: garage_roller_door_pct
+    name: "Garage Roller door Percent"
+    entity_id: ${garage_roller_door_position}
+    on_value:
+      - script.execute:
+          id: garage_door_draw
+          pos: !lambda return (int) x;
+  # NEW: consume the receiver's position % back
+
+  - platform: packet_transport
+    id: door_position
+    provider: garage-door-push-button      # must match the receiver's esphome: name:
+    remote_id: garage_position_pct
+    internal: true
+    on_value:
+      - script.execute:
+          id: garage_door_draw
+          pos: !lambda return (int) x;
+            
+  # Reports the WiFi signal strength/RSSI in dB
+
+  - platform: wifi_signal
+    name: "WiFi Signal dB"
+    id: wifi_signal_db
+    update_interval: 60s
+    entity_category: "diagnostic"
+
+  - platform: copy # WiFi signal in %
+    source_id: wifi_signal_db
+    id: wifi_signal_pct
+    name: "WiFi Signal Percent"
+    filters:
+      - lambda: return min(max(2 * (x + 100.0), 0.0), 100.0);
+    unit_of_measurement: "%"
+    entity_category: "diagnostic"
+    device_class: ""
+    on_value:
+      then:
+        - lvgl.label.update:
+            id: wifi_db_label
+            text:
+              format: "%.0f%%"
+              args: [ 'x' ]
+
+  #weather
+  #Home assistant sensor values
+  - platform: homeassistant
+    id: max_temp_today
+    entity_id: ${temp_max_today}
+    on_value:
+      - lambda: |-
+          char buf[12];
+          snprintf(buf, sizeof(buf), "%.0f / %.0f°C",
+            id(min_temp_today).state,
+            id(max_temp_today).state);
+          lv_label_set_text(id(idle_wx_today_temps), buf);
+  - platform: homeassistant
+    id: min_temp_today
+    entity_id: ${temp_min_today}
+    on_value:
+      - lambda: |-
+          char buf[12];
+          snprintf(buf, sizeof(buf), "%.0f / %.0f°C",
+            id(min_temp_today).state,
+            id(max_temp_today).state);
+          lv_label_set_text(id(idle_wx_today_temps), buf);
+  - platform: homeassistant
+    id: max_temp_tomorrow
+    entity_id: ${temp_max_tomorrow}
+    on_value:
+      - lambda: |-
+          char buf[12];
+          snprintf(buf, sizeof(buf), "%.0f / %.0f°C",
+            id(min_temp_tomorrow).state,
+            id(max_temp_tomorrow).state);
+          lv_label_set_text(id(idle_wx_tmr_temps), buf);
+  - platform: homeassistant
+    id: min_temp_tomorrow
+    entity_id: ${temp_min_tomorrow}
+    on_value:
+      - lambda: |-
+          char buf[12];
+          snprintf(buf, sizeof(buf), "%.0f / %.0f°C",
+            id(min_temp_tomorrow).state,
+            id(max_temp_tomorrow).state);
+          lv_label_set_text(id(idle_wx_tmr_temps), buf);
+  - platform: homeassistant
+    id: max_temp_dayafter
+    entity_id: ${temp_max_day_after}
+    on_value:
+      - lambda: |-
+          char buf[12];
+          snprintf(buf, sizeof(buf), "%.0f / %.0f°C",
+            id(min_temp_dayafter).state,
+            id(max_temp_dayafter).state);
+          lv_label_set_text(id(idle_wx_day2_temps), buf);
+  - platform: homeassistant
+    id: min_temp_dayafter
+    entity_id: ${temp_min_day_after}
+    on_value:
+      - lambda: |-
+          char buf[12];
+          snprintf(buf, sizeof(buf), "%.0f / %.0f°C",
+            id(min_temp_dayafter).state,
+            id(max_temp_dayafter).state);
+          lv_label_set_text(id(idle_wx_day2_temps), buf);
+
+font:
+  - file: 'https://github.com/Templarian/MaterialDesign-Webfont/raw/v7.4.47/fonts/materialdesignicons-webfont.ttf'
+    id: icon_font_20
+    size: 20
+    bpp: 4
+    glyphs: [
+      "\U000F0928",  # wifi-strength-3
+      "\U000F092E",   # no wifi
+      "\U000F0CCB",  # mdi-shield-alert
+      ]
+  - file: 'https://github.com/Templarian/MaterialDesign-Webfont/raw/v7.4.47/fonts/materialdesignicons-webfont.ttf'
+    id: icon_font_40
+    size: 40
+    bpp: 4
+    glyphs: [
+      "\U000F0335",  # mdi-lightbulb
+      "\U000F17C7",  # mdi-ceiling-light-outline
+      "\U000F1051",  # mdi-led-strip-variant
+      "\U000F07D6",  # mdi-led-strip
+      "\U000F1A4C",  # mdi-lightbulb-night
+      "\U000F0141",  # mdi-chevron-left
+      "\U000F0143",  # mdi-chevron-up
+      "\U000F0140",  # mdi-chevron-down
+      "\U000F089E",  # mdi-battery
+      "\U000F0425",  # mdi-power
+      "\U000F050F",  # mdi-thermometer
+      "\U000F0F9B",  # mdi-home-export-outline
+      "\U000F0F9C",  # mdi-home-import-outline
+      "\U000F0928",  # wifi-strength-3
+      "\U000F092E",   # no wifi
+      "\U000F0590", #cloudy
+      "\U000F0596", #rainy
+      "\U000F05A8", #sunny
+      "\U000F0593", #storm
+      "\U000F059D", #windy
+      "\U000F0594"  #clear night
+      ]
+  - file: 'https://github.com/Templarian/MaterialDesign-Webfont/raw/v7.4.47/fonts/materialdesignicons-webfont.ttf'
+    id: icon_font_80
+    size: 80
+    bpp: 4
+    glyphs: [
+      "\U000F0335",  # mdi-lightbulb
+      "\U000F1051",  # mdi-led-strip-variant
+      "\U000F07D6",  # mdi-led-strip
+      "\U000F1A4C",  # mdi-lightbulb-night
+      "\U000F0141",  # mdi-chevron-left
+      "\U000F0143",  # mdi-chevron-up
+      "\U000F0140",  # mdi-chevron-down
+      "\U000F089E",  # mdi-battery
+      "\U000F0425",  # mdi-power
+      "\U000F050F",  # mdi-thermometer
+      "\U000F0F9B",  # mdi-home-export-outline
+      "\U000F0F9C",  # mdi-home-import-outline
+      "\U000F187F",  # airplane-marker
+      "\U000F0CCB",  # mdi-shield-alert
+      "\U000F1717",  #mdi-movie-star
+      "\U000F17FC"   #garage-variant-lock
+      ]
+
+  - file: #big clock on idle page
+      type: gfonts
+      family: Roboto
+      weight: 400
+    id: font_time_large
+    size: 112
+    bpp: 4
+  - file: "gfonts://Montserrat"
+    id: font_ampm
+    size: 18
+    bpp: 4
+  - file: "gfonts://Montserrat"
+    id: font_day
+    size: 28
+    bpp: 4
+  - file: "gfonts://Montserrat"
+    id: font_date
+    size: 20
+    bpp: 4
+
+number:
+  - platform: template
+    name: "Start Hour - Display Off "
+    id: display_off_start
+    min_value: 0
+    max_value: 23
+    step: 1
+    initial_value: 23
+    optimistic: true
+    restore_value: true
+    unit_of_measurement: "h"
+    icon: mdi:clock-minus-outline
+
+  - platform: template
+    name: "End Hour - Display Off "
+    id: display_off_end
+    min_value: 0
+    max_value: 23
+    step: 1
+    initial_value: 6
+    optimistic: true
+    restore_value: true
+    unit_of_measurement: "h"
+    icon: mdi:clock-plus-outline
+
+#ESP now config - Provider
+espnow:
+  id: espnow_garage
+  auto_add_peer: True
+  enable_on_boot: True
+  on_receive:
+    then:
+      - lambda: |-
+          if (size == 2 && data[0] == 0xAC) {
+            if (data[1] == 0x01) id(ack_up) = true;
+            else if (data[1] == 0x02) id(ack_stop) = true;
+            else if (data[1] == 0x03) id(ack_down) = true;
+          }
+          
+packet_transport:
+  - platform: espnow
+    id: transport_unicast
+    espnow_id: espnow_garage
+    peer_address: ${espnow_receiver}
+    binary_sensors:
+      - cmd_up
+      - cmd_stop
+      - cmd_down
+    providers:
+      - name: garage-door-push-button
+
+#wall paper
+image:
+  - file: ${idle_bg_file}
+    id: idle_bg
+    resize: 480x480
+    type: RGB565
+  - file: ${garage_bg_file}
+    id: garage_bg
+    resize: 480x480
+    type: RGB565
+    

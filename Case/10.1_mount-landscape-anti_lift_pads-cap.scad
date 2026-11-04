@@ -11044,7 +11044,7 @@ module slide_cap() {
     }
 }
 
-// Screw pads (for 13mm long 2.5mm screw): increased from 4mm to 7mm total thickness (z 7.3..10.3).
+// Screw pads (for 13mm long M2.5 screw): increased from 4mm to 7mm total thickness (z 7.3..10.3).
 // Added 3mm annular extensions above the existing pads; 2.8mm screw clearance retained.
 // at (+-106.4, +-64.35) and (16.4, +-64.35).
 module mount() {

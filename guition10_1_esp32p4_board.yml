@@ -92,6 +92,8 @@ substitutions:
   heater_climate_entity: climate.rinnai_touch
   front_lock_entity: lock.frontdoor_aqara
   garage_lock_entity: lock.garagedoor_aqara
+  # Security page Alarm card: the Alarmo panel (Cat Away = its "night" mode).
+  alarmo_entity: alarm_control_panel.alarmo
   # Garage roller door: position sensor (also gives Open/Closed), the "next
   # action" flags and its Up / Stop / Down buttons (same as the HA card).
   garage_position_entity: sensor.garage_roller_door_garage_position
@@ -929,6 +931,7 @@ font:
       - "\U000F0717"  # snowflake (heater Cool)
       - "\U000F0210"  # fan (heater Fan)
       - "\U000F0156"  # close (heater timer window, speaker picker)
+      - "\U000F0498"  # shield (Security page Alarm card)
 
   - file: "https://raw.githubusercontent.com/Templarian/MaterialDesign-Webfont/master/fonts/materialdesignicons-webfont.ttf"
     id: font_mdi_36
@@ -1272,9 +1275,9 @@ lvgl:
     # Energy bar: green at the bottom through blue to purple at the top (a
     # two-stop gradient; its midpoint is blue).
     - id: ebar
-      width: 10
+      width: 20
       height: 4
-      radius: 2
+      radius: 4
       border_width: 0
       bg_color: 0x8B5CF6        # top: purple
       bg_grad_color: 0x34D399   # bottom: green
@@ -1282,7 +1285,7 @@ lvgl:
     # One slat of the garage roller-door curtain
     - id: garage_slat
       width: 100%
-      height: 8
+      height: 28
       radius: 1
       border_width: 0
       pad_all: 0
@@ -3036,12 +3039,18 @@ lvgl:
             text_font: font_body
             text_color: 0xA7B2C4
     # ==================================================================
-    # SECURITY: a 4 x 3 grid of cards below the header. For now only the
-    # two door lock statuses and the garage roller door, in the top row.
+    # SECURITY: a 4 x 3 grid of cards below the header. Top row: the two
+    # door locks (the other two cells are free). Rows 2-3: the Alarmo
+    # keypad (left half) and the garage roller door (right half).
     # ==================================================================
     - id: security_page
       bg_color: 0x0B1018
       scrollable: false
+      # A typed PIN does not stay behind when leaving the page.
+      on_unload:
+        - script.stop: alarm_pin_timeout
+        - lambda: id(alarm_pin).clear();
+        - script.execute: alarm_pin_draw
       on_swipe_right:
         - lvgl.page.show:
             id: home_page
@@ -3076,22 +3085,24 @@ lvgl:
             bg_opa: TRANSP
             border_width: 0
             radius: 0
-            pad_all: 4
+            # 20 px around the grid; 8 px between cells plus the cells' 6 px
+            # padding make 20 px between cards.
+            pad_all: 20
             scrollable: false
             layout:
               type: grid
+              # 4 x 3 cells of about 304 x 227 px (cards 292 x 215).
               grid_rows: [FR(1), FR(1), FR(1)]
-              # Outer half-width columns centre the three 320 px cards.
-              grid_columns: [FR(1), FR(2), FR(2), FR(2), FR(1)]
-              pad_row: 0
-              pad_column: 0
+              grid_columns: [FR(1), FR(1), FR(1), FR(1)]
+              pad_row: 8
+              pad_column: 8
             widgets:
-              # ---- Front Door lock (col 1, row 1) ----
+              # ---- Front Door lock (col 0, row 0) ----
               - obj:
                   styles: cell_style
                   scrollable: false
-                  grid_cell_column_pos: 1
-                  grid_cell_row_pos: 1
+                  grid_cell_column_pos: 0
+                  grid_cell_row_pos: 0
                   grid_cell_x_align: STRETCH
                   grid_cell_y_align: STRETCH
                   widgets:
@@ -3117,12 +3128,12 @@ lvgl:
                               text: "--"
                               text_font: font_title
                               text_color: 0xFFFFFF
-              # ---- Garage Door lock (col 2, row 1) ----
+              # ---- Garage Door lock (col 1, row 0) ----
               - obj:
                   styles: cell_style
                   scrollable: false
-                  grid_cell_column_pos: 2
-                  grid_cell_row_pos: 1
+                  grid_cell_column_pos: 1
+                  grid_cell_row_pos: 0
                   grid_cell_x_align: STRETCH
                   grid_cell_y_align: STRETCH
                   widgets:
@@ -3149,15 +3160,178 @@ lvgl:
                               text_font: font_title
                               text_color: 0xFFFFFF
               # =====================================================================
-              # 3. GARAGE Roller DOOR                     col 9 span 2 | row 1 span 5
+              # ALARM (Alarmo)                          col 0 span 2 | row 1 span 2
+              # Card about 604 x 449: status top right, the PIN over a keypad
+              # on the left, Arm Away / Cat Away / Disarm on the right. Each
+              # button sends the PIN as the code, then clears it; the button
+              # of the current state is highlighted (alarm_draw).
               # =====================================================================
               - obj:
                   styles: cell_style
                   scrollable: false
-                  grid_cell_column_pos: 3
+                  grid_cell_column_pos: 0
                   grid_cell_row_pos: 1
-                  grid_cell_column_span: 1
-                  grid_cell_row_span: 1
+                  grid_cell_column_span: 2
+                  grid_cell_row_span: 2
+                  grid_cell_x_align: STRETCH
+                  grid_cell_y_align: STRETCH
+                  widgets:
+                    - obj:
+                        id: card_alarm
+                        styles: card_style
+                        width: 100%
+                        height: 100%
+                        scrollable: false
+                        widgets:
+                          - label: {styles: icon_24, x: 14, y: 8, text: "\U000F0498"}   # shield
+                          - label: {styles: title_text, x: 48, y: 6, text: "Alarm"}
+                          # Status: a dot and the state, in the state's colour.
+                          - obj:
+                              align: TOP_RIGHT
+                              x: -16
+                              y: 10
+                              width: SIZE_CONTENT
+                              height: SIZE_CONTENT
+                              bg_opa: TRANSP
+                              border_width: 0
+                              pad_all: 0
+                              scrollable: false
+                              layout:
+                                type: flex
+                                flex_flow: ROW
+                                flex_align_cross: CENTER
+                                pad_column: 8
+                              widgets:
+                                - obj: {id: alarm_status_dot, width: 12, height: 12, radius: 6, border_width: 0, bg_color: 0x9E9E9E}
+                                - label: {id: alarm_status_label, text: "--", text_font: font_body, text_color: 0x9E9E9E}
+                          # PIN as "*" (alarm_pin_draw), centred over the keypad.
+                          - label:
+                              id: alarm_pin_label
+                              x: 20
+                              y: 50
+                              width: 300
+                              text: "Enter PIN"
+                              text_align: CENTER
+                              text_font: font_title
+                              text_color: 0x5A6577
+                          - buttonmatrix:
+                              id: alarm_keypad
+                              x: 20
+                              y: 96
+                              width: 300
+                              height: 330
+                              bg_opa: TRANSP
+                              border_width: 0
+                              pad_all: 0
+                              pad_row: 12
+                              pad_column: 12
+                              items:
+                                bg_color: 0x202B3B
+                                border_color: 0x34445A
+                                border_width: 1
+                                text_color: 0xFFFFFF
+                                text_font: font_ui_medium
+                                radius: 12
+                                shadow_width: 0
+                              rows:
+                                - buttons:
+                                    - text: "1"
+                                    - text: "2"
+                                    - text: "3"
+                                - buttons:
+                                    - text: "4"
+                                    - text: "5"
+                                    - text: "6"
+                                - buttons:
+                                    - text: "7"
+                                    - text: "8"
+                                    - text: "9"
+                                - buttons:
+                                    - text: "Clear"
+                                    - text: "0"
+                                    - text: "Del"
+                              on_click:
+                                - lambda: |-
+                                    static constexpr char KEYS[] = "123456789 0";
+                                    auto &pin = id(alarm_pin);
+                                    if (x == 9) pin.clear();
+                                    else if (x == 11) { if (!pin.empty()) pin.pop_back(); }
+                                    else if (x < 11 && pin.size() < 10) pin.push_back(KEYS[x]);
+                                - script.execute: alarm_pin_draw
+                                - script.execute: alarm_pin_timeout
+                          # Mode buttons (x 340-584), the keypad's height.
+                          - button:
+                              id: alarm_away_btn
+                              x: 340
+                              y: 96
+                              width: 244
+                              height: 98
+                              radius: 14
+                              bg_color: 0x221A08
+                              border_color: 0x6B4F0A
+                              border_width: 1
+                              shadow_width: 0
+                              checked:
+                                bg_color: 0x7A4A00
+                                border_color: 0xFF8C00
+                                border_width: 2
+                              on_click:
+                                - script.execute: {id: alarm_command, service: "alarm_control_panel.alarm_arm_away"}
+                              widgets:
+                                - label: {align: LEFT_MID, x: 20, text: "\U000F033E", text_font: font_mdi_36, text_color: 0xFF8C00}
+                                - label: {align: LEFT_MID, x: 70, text: "Arm Away", text_font: font_body, text_color: 0xFFFFFF}
+                          - button:
+                              id: alarm_cat_btn
+                              x: 340
+                              y: 212
+                              width: 244
+                              height: 98
+                              radius: 14
+                              bg_color: 0x1A1430
+                              border_color: 0x4B3A8A
+                              border_width: 1
+                              shadow_width: 0
+                              checked:
+                                bg_color: 0x4B3A8A
+                                border_color: 0xB39DFF
+                                border_width: 2
+                              on_click:
+                                - script.execute: {id: alarm_command, service: "alarm_control_panel.alarm_arm_night"}
+                              widgets:
+                                - label: {align: LEFT_MID, x: 20, text: "\U000F011B", text_font: font_mdi_36, text_color: 0xB39DFF}
+                                - label: {align: LEFT_MID, x: 70, text: "Cat Away", text_font: font_body, text_color: 0xFFFFFF}
+                          - button:
+                              id: alarm_disarm_btn
+                              x: 340
+                              y: 328
+                              width: 244
+                              height: 98
+                              radius: 14
+                              bg_color: 0x0A1F12
+                              border_color: 0x1F6B3A
+                              border_width: 1
+                              shadow_width: 0
+                              checked:
+                                bg_color: 0x1F6B3A
+                                border_color: 0x42F591
+                                border_width: 2
+                              on_click:
+                                - script.execute: {id: alarm_command, service: "alarm_control_panel.alarm_disarm"}
+                              widgets:
+                                - label: {align: LEFT_MID, x: 20, text: "\U000F033F", text_font: font_mdi_36, text_color: 0x42F591}
+                                - label: {align: LEFT_MID, x: 70, text: "Disarm", text_font: font_body, text_color: 0xFFFFFF}
+
+              # =====================================================================
+              # GARAGE ROLLER DOOR                      col 2 span 2 | row 0 span 3
+              # Card about 604 x 684: the 440 x 474 slat door, the button below.
+              # =====================================================================
+              - obj:
+                  styles: cell_style
+                  scrollable: false
+                  grid_cell_column_pos: 2
+                  grid_cell_row_pos: 0
+                  grid_cell_column_span: 2
+                  grid_cell_row_span: 3
                   grid_cell_x_align: STRETCH
                   grid_cell_y_align: STRETCH
                   widgets:
@@ -3169,22 +3343,22 @@ lvgl:
                         scrollable: false
                         widgets:
                           - label:
-                              x: 42
-                              y: 10
+                              styles: title_text
+                              x: 48
+                              y: 6
                               text: "Garage Roller"
-                              text_font: font_small
                           - label:
                               id: garage_icon
                               styles: icon_24
-                              x: 12
-                              y: 10
+                              x: 14
+                              y: 8
                               text: "\U000F06D9"
                           - obj:          # door position: roller-door slats
                               align: TOP_MID
                               id: garage_position_container
-                              y: 52
-                              width: 150
-                              height: 110
+                              y: 64
+                              width: 440
+                              height: 474      # 470 px inside the 2 px border
                               radius: 8
                               bg_color: 0x222B38
                               border_color: 0x3A4658
@@ -3193,14 +3367,15 @@ lvgl:
                               scrollable: false
                               widgets:
                                 # Roller-door curtain: horizontal slats from the top,
-                                # height = closed share of the door (100 - position %).
+                                # height = closed share of the 470 px door (100 -
+                                # position %), slid there by the garage_position sensor.
                                 # Slats stay at the bottom edge, so a shorter curtain
                                 # looks like the door rolling up. The container clips it.
                                 - obj:
                                     id: garage_door_curtain
                                     align: TOP_MID
                                     width: 100%
-                                    height: 100%
+                                    height: 470
                                     bg_opa: TRANSP
                                     border_width: 0
                                     radius: 0
@@ -3211,8 +3386,12 @@ lvgl:
                                       flex_flow: COLUMN
                                       flex_align_main: END
                                       flex_align_cross: CENTER
-                                      pad_row: 3
+                                      pad_row: 6     # 14 x 28 + 13 x 6 = the 470 px door
                                     widgets:
+                                      - obj: {styles: garage_slat}
+                                      - obj: {styles: garage_slat}
+                                      - obj: {styles: garage_slat}
+                                      - obj: {styles: garage_slat}
                                       - obj: {styles: garage_slat}
                                       - obj: {styles: garage_slat}
                                       - obj: {styles: garage_slat}
@@ -3228,10 +3407,10 @@ lvgl:
                           - label:
                               id: garage_status_label
                               align: TOP_RIGHT
-                              x: -12
-                              y: 12
+                              x: -16
+                              y: 10
                               text: "--"
-                              text_font: font_small
+                              text_font: font_body
                               text_color: 0xA7B2C4
                           # One button for the controller's next action (Up / Stop /
                           # Down), centred below the door; garage_update_button sets
@@ -3240,9 +3419,9 @@ lvgl:
                               id: garage_btn
                               styles: round_btn
                               align: TOP_MID
-                              y: 170
-                              width: 48
-                              height: 48
+                              y: 566
+                              width: 84
+                              height: 84
                               bg_color: 0x527FD6
                               on_click:
                                 - script.execute: garage_press
@@ -3251,7 +3430,7 @@ lvgl:
                                     id: garage_btn_icon
                                     align: CENTER
                                     text: "\U000F0737"
-                                    text_font: font_mdi_24
+                                    text_font: font_mdi_36
                                     text_color: 0xFFFFFF
 
     # ==================================================================
@@ -3296,25 +3475,27 @@ lvgl:
             bg_opa: TRANSP
             border_width: 0
             radius: 0
-            pad_all: 4
+            # 20 px around the grid; 8 px between cells plus the cells' 6 px
+            # padding make 20 px between cards (as on the Security page).
+            pad_all: 20
             scrollable: false
             layout:
               type: grid
               grid_rows: [FR(1), FR(1), FR(1)]
               grid_columns: [FR(1), FR(1), FR(1)]
-              pad_row: 0
-              pad_column: 0
+              pad_row: 8
+              pad_column: 8
             widgets:
               # =====================================================================
-              # 6. ELECTRICITY USAGE               col 1 span 4 | row 1 span 5
+              # 6. ELECTRICITY USAGE        col 0 span 2 | row 0 span 2 (~812 x 449)
               # =====================================================================
               - obj:
                   styles: cell_style
                   scrollable: false
-                  grid_cell_column_pos: 1
-                  grid_cell_row_pos: 1
-                  grid_cell_column_span: 1
-                  grid_cell_row_span: 1
+                  grid_cell_column_pos: 0
+                  grid_cell_row_pos: 0
+                  grid_cell_column_span: 2
+                  grid_cell_row_span: 2
                   grid_cell_x_align: STRETCH
                   grid_cell_y_align: STRETCH
                   widgets:
@@ -3339,11 +3520,13 @@ lvgl:
                           # the left. fetch_energy_history fills energy_history from
                           # HA long-term statistics; draw_energy_bars scales the bars
                           # and the Y axis (kWh) to the busiest day.
+                          # Axis labels centred on the top, middle and bottom of
+                          # the 300 px bar area (y 80-380).
                           - label:
                               id: elec_axis_max
                               x: 0
-                              y: 40
-                              width: 31
+                              y: 71
+                              width: 52
                               text: ""
                               text_align: RIGHT
                               text_font: font_small
@@ -3351,40 +3534,40 @@ lvgl:
                           - label:
                               id: elec_axis_mid
                               x: 0
-                              y: 110
-                              width: 31
+                              y: 221
+                              width: 52
                               text: ""
                               text_align: RIGHT
                               text_font: font_small
                               text_color: 0xA7B2C4
                           - label:
                               x: 0
-                              y: 180
-                              width: 31
+                              y: 371
+                              width: 52
                               text: "0"
                               text_align: RIGHT
                               text_font: font_small
                               text_color: 0xA7B2C4
                           - obj:          # Y axis line
-                              x: 35
-                              y: 48
+                              x: 60
+                              y: 80
                               width: 2
-                              height: 140
+                              height: 300
                               radius: 0
                               border_width: 0
                               bg_color: 0x34445A
                           - label:        # axis unit, under the axis
-                              x: 11
-                              y: 200
+                              x: 22
+                              y: 400
                               text: "kWh"
                               text_font: font_small
                               text_color: 0x778397
                           - obj:
                               id: elec_bars
-                              x: 43
-                              y: 48
-                              width: 180          # 14 bars x 10 px + gaps; ends at x 223, clear of the ring (x ~256)
-                              height: 140
+                              x: 72
+                              y: 80
+                              width: 460          # 14 bars x 20 px + gaps; ends at x 532, clear of the ring (x ~568)
+                              height: 300
                               bg_opa: TRANSP
                               border_width: 0
                               pad_all: 0
@@ -3415,19 +3598,19 @@ lvgl:
                           - label:
                               id: elec_hist_label
                               align: RIGHT_MID
-                              x: -4
-                              y: 85
-                              width: 140
+                              x: -14
+                              y: 140
+                              width: 260
                               text: ""
                               text_align: CENTER
-                              text_font: font_small
+                              text_font: font_body
                               text_color: 0xA7B2C4
                           - obj:          # ring + live value
                               align: RIGHT_MID
-                              x: -22
-                              y: 14
-                              width: 104
-                              height: 104
+                              x: -44
+                              y: 0
+                              width: 200
+                              height: 200
                               bg_opa: TRANSP
                               border_width: 0
                               pad_all: 0
@@ -3436,29 +3619,29 @@ lvgl:
                                 - arc:
                                     id: elec_arc
                                     align: CENTER
-                                    width: 104
-                                    height: 104
+                                    width: 200
+                                    height: 200
                                     min_value: 0
                                     max_value: ${power_max_w}
                                     value: 2400
                                     adjustable: false
                                     arc_color: 0x29364A
-                                    arc_width: 7
+                                    arc_width: 14
                                     indicator:
                                       arc_color: 0x527FD6
-                                      arc_width: 7
+                                      arc_width: 14
                                 - label:
                                     id: elec_value_label
                                     align: CENTER
-                                    y: -8
+                                    y: -14
                                     text: "2.4"
-                                    text_font: font_ui_medium
+                                    text_font: font_title
                                     text_color: 0xFFFFFF
                                 - label:
                                     align: CENTER
-                                    y: 16
+                                    y: 26
                                     text: "kW"
-                                    text_font: font_small
+                                    text_font: font_body
                                     text_color: 0xA7B2C4
 
 
@@ -5406,6 +5589,12 @@ globals:
     restore_value: false
     initial_value: "0"
 
+  # Security page Alarm card: the PIN typed on its keypad (up to 10 digits).
+  - id: alarm_pin
+    type: std::string
+    restore_value: false
+    initial_value: '""'
+
   # Heating and Cooling timers, set in heater_sched_popup and used when the
   # power button starts the selected mode; each is kept until it fires or
   # the heater is turned off (power button) or on/off elsewhere.
@@ -6767,7 +6956,7 @@ script:
             total += v;
             days++;
           }
-          // Heights in percent of the 140 px bar area (1 % = 1.4 px), not
+          // Heights in percent of the 300 px bar area (1 % = 3 px), not
           // pixels: the Energy page is not laid out until it is first shown,
           // so its measured height is 0 at boot. Empty days are a 3 % stub.
           for (int i = 0; i < 14; i++) {
@@ -7608,6 +7797,67 @@ script:
               snprintf(buf, sizeof(buf), "%.0f", id(heater_target));
               return std::string(buf);
 
+  # Alarm card: run an Alarmo action (arm away / arm night = Cat Away /
+  # disarm) with the typed PIN as the code, then clear the PIN.
+  - id: alarm_command
+    parameters:
+      service: string
+    then:
+      - homeassistant.action:
+          action: !lambda 'return service;'
+          data:
+            entity_id: ${alarmo_entity}
+            code: !lambda 'return id(alarm_pin);'
+      - script.stop: alarm_pin_timeout
+      - lambda: id(alarm_pin).clear();
+      - script.execute: alarm_pin_draw
+
+  # Alarm card PIN: one "*" per digit, or "Enter PIN" when empty.
+  - id: alarm_pin_draw
+    then:
+      - lambda: |-
+          const auto &pin = id(alarm_pin);
+          lv_label_set_text(id(alarm_pin_label), pin.empty() ? "Enter PIN" : std::string(pin.size(), '*').c_str());
+          lv_obj_set_style_text_color(id(alarm_pin_label), lv_color_hex(pin.empty() ? 0x5A6577 : 0xFFFFFF),
+                                      LV_PART_MAIN);
+
+  # A typed PIN is cleared 30 s after the last key.
+  - id: alarm_pin_timeout
+    mode: restart
+    then:
+      - delay: 30s
+      - lambda: id(alarm_pin).clear();
+      - script.execute: alarm_pin_draw
+
+  # Alarm card status (text and colour, as on the 4" panel) and the
+  # highlighted button for the Alarmo state.
+  - id: alarm_draw
+    then:
+      - lambda: |-
+          const std::string &s = id(alarm_state).state;
+          const char *text = "Unknown";
+          uint32_t colour = 0x9E9E9E;  // grey: unavailable / unknown
+          if (s == "disarmed")                 { text = "Disarmed";       colour = 0x00E676; }
+          else if (s == "arming")              { text = "Arming";         colour = 0xFFD600; }
+          else if (s == "armed_away")          { text = "Armed Away";     colour = 0xFF6D00; }
+          else if (s == "armed_home")          { text = "Armed Home";     colour = 0xFF9100; }
+          else if (s == "armed_night")         { text = "Cat Away";       colour = 0x7C4DFF; }
+          else if (s == "armed_vacation")      { text = "Armed Vacation"; colour = 0x00B0FF; }
+          else if (s == "armed_custom_bypass") { text = "Armed Custom";   colour = 0x00BCD4; }
+          else if (s == "pending")             { text = "Pending";        colour = 0xFFAB00; }
+          else if (s == "triggered")           { text = "Triggered";      colour = 0xFF1744; }
+          else if (s == "unavailable")         { text = "Unavailable"; }
+          lv_label_set_text(id(alarm_status_label), text);
+          lv_obj_set_style_text_color(id(alarm_status_label), lv_color_hex(colour), LV_PART_MAIN);
+          lv_obj_set_style_bg_color(id(alarm_status_dot), lv_color_hex(colour), LV_PART_MAIN);
+          auto check = [](lv_obj_t *btn, bool on) {
+            if (on) lv_obj_add_state(btn, LV_STATE_CHECKED);
+            else lv_obj_remove_state(btn, LV_STATE_CHECKED);
+          };
+          check(id(alarm_away_btn), s == "armed_away");
+          check(id(alarm_cat_btn), s == "armed_night");
+          check(id(alarm_disarm_btn), s == "disarmed");
+
   # Garage button shows the controller's next action: Stop (red), Down, or Up.
   - id: garage_update_button
     then:
@@ -7967,9 +8217,22 @@ sensor:
           int pos = (int) x;
           if (pos < 0) pos = 0;
           if (pos > 100) pos = 100;
-          // Percent of the frame, not pixels: the Security page is not laid
-          // out until it is first shown, so its measured height is 0 at boot.
-          lv_obj_set_height(id(garage_door_curtain), lv_pct(100 - pos));
+          // Slide the curtain to the closed share of the 470 px door over
+          // 0.8 s. Fixed pixels and the height last set (its style value),
+          // not measured sizes: the Security page is not laid out until it
+          // is first shown, so its measured heights are 0 at boot.
+          lv_obj_t *curtain = id(garage_door_curtain);
+          lv_anim_del(curtain, nullptr);
+          lv_anim_t a;
+          lv_anim_init(&a);
+          lv_anim_set_var(&a, curtain);
+          lv_anim_set_values(&a, lv_obj_get_style_height(curtain, LV_PART_MAIN), 470 * (100 - pos) / 100);
+          lv_anim_set_duration(&a, 800);
+          lv_anim_set_path_cb(&a, lv_anim_path_ease_in_out);
+          lv_anim_set_exec_cb(&a, [](void *obj, int32_t h) {
+            lv_obj_set_height((lv_obj_t *) obj, h);
+          });
+          lv_anim_start(&a);
           // Status and icon from the position: 0-3 % closed, 97-100 % open.
           const char *status = pos <= 3 ? "Closed" : pos >= 97 ? "Open" : "Partly open";
           lv_label_set_text(id(garage_status_label), status);
@@ -8223,6 +8486,14 @@ text_sensor:
             std::string s = x;
             if (!s.empty()) s[0] = toupper(s[0]);
             return s;
+
+  # Security page Alarm card: the Alarmo state (disarmed, armed_away...).
+  - platform: homeassistant
+    id: alarm_state
+    entity_id: ${alarmo_entity}
+    internal: true
+    on_value:
+      - script.execute: alarm_draw
 
   - platform: homeassistant
     id: garage_lock_state
