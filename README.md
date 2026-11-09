@@ -98,6 +98,34 @@ switch:
     restore_mode: ALWAYS_OFF
 ```
 
+### CN4 (I2C) connector
+
+CN4 (part 18) is a 4-pin connector on the shared I2C bus, the same lines as
+the ES8311 codec, touch controller, camera and RTC.
+
+| CN4 pin | Silkscreen | Signal | Use |
+|---|---|---|---|
+| 1 | GND | GND | Ground |
+| 2 | 3V3 | ESP_3V3 | 3.3 V supply **output** |
+| 3 | SCL | ES_I2C_SCL, GPIO8 | Shared I2C clock |
+| 4 | SDA | ES_I2C_SDA, GPIO7 | Shared I2C data |
+
+The mapping is from [`docs/5-Schematic`](docs/5-Schematic) (CN4 and the
+camera FPC both carry the ES_I2C nets) and matches the `internal_i2c` bus
+in the config. The bus already has pull-ups.
+
+**Adding an I2C device.** Use a 3.3 V device and put it on the existing
+`i2c_id: internal_i2c`; do not declare a second `i2c:` bus on these pins.
+Addresses already in use: 0x18 (codec), 0x32 (RTC), 0x36 (camera) and 0x40
+(touch).
+
+**Not a general GPIO.** SCL and SDA cannot drive a relay or anything else
+without breaking audio, touch, the camera and the clock. For a **3.3 V**
+relay module on the cooler, keep the signal on CN2 pin 2 (GPIO37) and power
+the module from CN4: pin 2 (3V3) to the module's VCC and pin 1 (GND) to its
+GND. An active-low 3.3 V module turns fully off when GPIO37 is high (the
+same 3.3 V as its supply), so keep `inverted: true`.
+
 ## Audio
 
 **Capture.** The ES8311 records in stereo: the microphone (MIC1) on the left

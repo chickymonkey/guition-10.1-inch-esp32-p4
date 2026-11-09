@@ -1,6 +1,6 @@
 # =============================================================================
 # Guition JC8012P4A1C_I_W_Y1 (ESP32-P4 10.1" sku:10153002-v3 [2635]): SIP JPEG videophone + HA dashboard
-# 
+# camera horizontal flip, label removal.
 
 substitutions:
   name: guition-p4-101
@@ -16,6 +16,15 @@ substitutions:
   intercom_idf_ref: v2026.11.0-dev
   assets_base: "https://github.com/n-IA-hane/esphome-intercom/raw/main/"
   images_base: "https://raw.githubusercontent.com/chickymonkey/guition-10.1-inch-esp32-p4/main/images/"
+  # Intercom page caller photos. Personal photos, so they are NOT in the
+  # GitHub repo: they are local files on the ESPHome machine (here the Home
+  # Assistant /config/esphome folder) and are only built into the firmware.
+  # A call whose peer name contains caller_photo_N_name shows that photo.
+  personal_images_base: "/config/esphome/images/personal/"
+  caller_photo_1_name: "Bella"
+  caller_photo_1_file: "bc.jpg"
+  caller_photo_2_name: "Frank iPhone"
+  caller_photo_2_file: "ff.jpg"
 
   # [GUITION] ES8311 ADC PGA sets hardware gain; this is the post-AEC user trim.
   mic_gain_min: "-20"
@@ -37,9 +46,11 @@ substitutions:
   # is the size that works: 1200x675 is rejected by the P4 video path
   # ("input width=1200, height=675 is not supported"), which then falls back
   # to full 1080p and runs out of buffer memory.
-  p4_video_width: "960"
-  p4_video_height: "540"
-  p4_video_fps: "13"
+  #p4_video_width: "960"
+  #p4_video_height: "540"
+  p4_video_width: "1280"
+  p4_video_height: "800"
+  p4_video_fps: "30"
   p4_camera_rotation: "0"
   p4_jpeg_quality: "10"
   p4_video_max_decode_width: "960"
@@ -127,7 +138,7 @@ substitutions:
   light_living_right_entity: light.living_room_right
   # Frigate "last person" snapshots for the home page camera tiles, fetched
   # from HA's image proxy. ha_base_url must be reachable from this device.
-  ha_base_url: "http://192.168.3.120:8123"
+  ha_base_url: "http://192.168.3.120"
   snapshot_front_entity: image.porchdahuafrigate_person
   snapshot_driveway_entity: image.garagecamera_person
   # Camera pages: Frigate "last cat" snapshots, shown under the person
@@ -197,6 +208,10 @@ esphome:
     - priority: -100
       then:
         - script.execute: backlight_timer     # sets the saved Screen Brightness
+        # The cooler is assumed off at boot (see cooler_on).
+        - binary_sensor.template.publish:
+            id: cooler_on
+            state: OFF
         - script.execute: home_return_timer
         # Amp off until a call, ring or playback needs it (idle amp = hiss/squeal).
         - output.turn_off: speaker_enable
@@ -254,7 +269,7 @@ external_components:
   # comes from the p4_video_jpeg package).
   - source: github://chickymonkey/camera_OV02C10_component@main
     components: [ov02c10]
-    refresh: 1d
+    refresh: 0s
   - source: ${audio_stack_components_source}
     components: [esp_audio_stack, esp_aec]
   ##RTSP stream
@@ -466,9 +481,8 @@ i2c:
 # no XCLK/reset/power-down lines.
 ov02c10:
   lanes: 1
+  horizontal_mirror: true     # sensor mirror (0x3820 bit 3); set false if it now looks mirrored
 
-# Merged with the p4_video_jpeg package's esp_video_camera (resolution, fps,
-# rotation and quality come from the p4_video_* substitutions above).
 esp_video_camera:
   id: p4_camera
   buffer_count: 2
@@ -708,7 +722,7 @@ voip_stack:
         id: call_ringing_out_status_label
         text: "CALLING"
     - script.execute: backlight_timer
-    - script.execute: show_phone_page      # Intercom page (e.g. a call from the boot button)
+    - script.execute: {id: call_page_show, active: true}   # Intercom page (e.g. a call from the boot button)
 
   on_dest_ringing:
     - lambda: id(peer_name) = peer;
@@ -720,17 +734,21 @@ voip_stack:
   on_ringing:
     - lambda: id(peer_name) = peer;
     - script.execute: backlight_timer
-    - script.execute: show_phone_page
+    - script.execute: {id: call_page_show, active: true}
     - script.execute: voip_start_ringtone
 
+  # With Auto answer on, a call can go straight here without on_ringing:
+  # wake the screen and show the Intercom page too (show_video_page takes
+  # over when the first remote video frame arrives).
   on_in_call:
     - lambda: id(peer_name) = peer;
     - script.execute: voip_stop_ringtone
-    - script.execute: update_call_tile
+    - script.execute: backlight_timer
+    - script.execute: {id: call_page_show, active: true}
 
   on_idle:
     - script.execute: voip_stop_ringtone
-    - script.execute: show_phone_page
+    - script.execute: {id: call_page_show, active: false}
 
   on_hangup:
     - script.execute: voip_stop_ringtone
@@ -797,7 +815,7 @@ font:
       weight: 700
     id: font_title
     bpp: 4             # anti-aliased (default 1 bpp is jagged)
-    size: 32
+    size: 27
     glyphsets: [GF_Latin_Core]
 
   - file:
@@ -1113,38 +1131,52 @@ image:
     on_download_finished:
       - lvgl.image.update: {id: cam_drive_cat_snap, src: cam_drive_cat_img}
       - lvgl.widget.show: cam_drive_cat_snap
+  # Intercom page caller photos: local files (see personal_images_base),
+  # fitted to the 170 px round photo frame of the caller card.
+  - platform: file
+    file: "${personal_images_base}${caller_photo_1_file}"
+    id: caller_photo_1
+    resize: 170x170
+    type: RGB565
+    byte_order: little_endian
+  - platform: file
+    file: "${personal_images_base}${caller_photo_2_file}"
+    id: caller_photo_2
+    resize: 170x170
+    type: RGB565
+    byte_order: little_endian
   # Home page NBA strip: team logos (30x30 PNGs) in the order of nba_draw's
-  # NAMES / LOGOS.
-  - {platform: file, file: "${images_base}nba/atl.png", id: nba_atl, resize: 22x22, type: RGB565, transparency: alpha_channel, byte_order: little_endian}
-  - {platform: file, file: "${images_base}nba/bkn.png", id: nba_bkn, resize: 22x22, type: RGB565, transparency: alpha_channel, byte_order: little_endian}
-  - {platform: file, file: "${images_base}nba/bos.png", id: nba_bos, resize: 22x22, type: RGB565, transparency: alpha_channel, byte_order: little_endian}
-  - {platform: file, file: "${images_base}nba/cha.png", id: nba_cha, resize: 22x22, type: RGB565, transparency: alpha_channel, byte_order: little_endian}
-  - {platform: file, file: "${images_base}nba/chi.png", id: nba_chi, resize: 22x22, type: RGB565, transparency: alpha_channel, byte_order: little_endian}
-  - {platform: file, file: "${images_base}nba/cle.png", id: nba_cle, resize: 22x22, type: RGB565, transparency: alpha_channel, byte_order: little_endian}
-  - {platform: file, file: "${images_base}nba/dal.png", id: nba_dal, resize: 22x22, type: RGB565, transparency: alpha_channel, byte_order: little_endian}
-  - {platform: file, file: "${images_base}nba/den.png", id: nba_den, resize: 22x22, type: RGB565, transparency: alpha_channel, byte_order: little_endian}
-  - {platform: file, file: "${images_base}nba/det.png", id: nba_det, resize: 22x22, type: RGB565, transparency: alpha_channel, byte_order: little_endian}
-  - {platform: file, file: "${images_base}nba/gs.png", id: nba_gs, resize: 22x22, type: RGB565, transparency: alpha_channel, byte_order: little_endian}
-  - {platform: file, file: "${images_base}nba/hou.png", id: nba_hou, resize: 22x22, type: RGB565, transparency: alpha_channel, byte_order: little_endian}
-  - {platform: file, file: "${images_base}nba/ind.png", id: nba_ind, resize: 22x22, type: RGB565, transparency: alpha_channel, byte_order: little_endian}
-  - {platform: file, file: "${images_base}nba/lac.png", id: nba_lac, resize: 22x22, type: RGB565, transparency: alpha_channel, byte_order: little_endian}
-  - {platform: file, file: "${images_base}nba/lal.png", id: nba_lal, resize: 22x22, type: RGB565, transparency: alpha_channel, byte_order: little_endian}
-  - {platform: file, file: "${images_base}nba/mem.png", id: nba_mem, resize: 22x22, type: RGB565, transparency: alpha_channel, byte_order: little_endian}
-  - {platform: file, file: "${images_base}nba/mia.png", id: nba_mia, resize: 22x22, type: RGB565, transparency: alpha_channel, byte_order: little_endian}
-  - {platform: file, file: "${images_base}nba/mil.png", id: nba_mil, resize: 22x22, type: RGB565, transparency: alpha_channel, byte_order: little_endian}
-  - {platform: file, file: "${images_base}nba/min.png", id: nba_min, resize: 22x22, type: RGB565, transparency: alpha_channel, byte_order: little_endian}
-  - {platform: file, file: "${images_base}nba/no.png", id: nba_no, resize: 22x22, type: RGB565, transparency: alpha_channel, byte_order: little_endian}
-  - {platform: file, file: "${images_base}nba/ny.png", id: nba_ny, resize: 22x22, type: RGB565, transparency: alpha_channel, byte_order: little_endian}
-  - {platform: file, file: "${images_base}nba/okc.png", id: nba_okc, resize: 22x22, type: RGB565, transparency: alpha_channel, byte_order: little_endian}
-  - {platform: file, file: "${images_base}nba/orl.png", id: nba_orl, resize: 22x22, type: RGB565, transparency: alpha_channel, byte_order: little_endian}
-  - {platform: file, file: "${images_base}nba/phi.png", id: nba_phi, resize: 22x22, type: RGB565, transparency: alpha_channel, byte_order: little_endian}
-  - {platform: file, file: "${images_base}nba/phx.png", id: nba_phx, resize: 22x22, type: RGB565, transparency: alpha_channel, byte_order: little_endian}
-  - {platform: file, file: "${images_base}nba/por.png", id: nba_por, resize: 22x22, type: RGB565, transparency: alpha_channel, byte_order: little_endian}
-  - {platform: file, file: "${images_base}nba/sa.png", id: nba_sa, resize: 22x22, type: RGB565, transparency: alpha_channel, byte_order: little_endian}
-  - {platform: file, file: "${images_base}nba/sac.png", id: nba_sac, resize: 22x22, type: RGB565, transparency: alpha_channel, byte_order: little_endian}
-  - {platform: file, file: "${images_base}nba/tor.png", id: nba_tor, resize: 22x22, type: RGB565, transparency: alpha_channel, byte_order: little_endian}
-  - {platform: file, file: "${images_base}nba/utah.png", id: nba_utah, resize: 22x22, type: RGB565, transparency: alpha_channel, byte_order: little_endian}
-  - {platform: file, file: "${images_base}nba/wsh.png", id: nba_wsh, resize: 22x22, type: RGB565, transparency: alpha_channel, byte_order: little_endian}
+  # LOGOS, shown at their native 30x30.
+  - {platform: file, file: "${images_base}nba/atl.png", id: nba_atl, resize: 30x30, type: RGB565, transparency: alpha_channel, byte_order: little_endian}
+  - {platform: file, file: "${images_base}nba/bkn.png", id: nba_bkn, resize: 30x30, type: RGB565, transparency: alpha_channel, byte_order: little_endian}
+  - {platform: file, file: "${images_base}nba/bos.png", id: nba_bos, resize: 30x30, type: RGB565, transparency: alpha_channel, byte_order: little_endian}
+  - {platform: file, file: "${images_base}nba/cha.png", id: nba_cha, resize: 30x30, type: RGB565, transparency: alpha_channel, byte_order: little_endian}
+  - {platform: file, file: "${images_base}nba/chi.png", id: nba_chi, resize: 30x30, type: RGB565, transparency: alpha_channel, byte_order: little_endian}
+  - {platform: file, file: "${images_base}nba/cle.png", id: nba_cle, resize: 30x30, type: RGB565, transparency: alpha_channel, byte_order: little_endian}
+  - {platform: file, file: "${images_base}nba/dal.png", id: nba_dal, resize: 30x30, type: RGB565, transparency: alpha_channel, byte_order: little_endian}
+  - {platform: file, file: "${images_base}nba/den.png", id: nba_den, resize: 30x30, type: RGB565, transparency: alpha_channel, byte_order: little_endian}
+  - {platform: file, file: "${images_base}nba/det.png", id: nba_det, resize: 30x30, type: RGB565, transparency: alpha_channel, byte_order: little_endian}
+  - {platform: file, file: "${images_base}nba/gs.png", id: nba_gs, resize: 30x30, type: RGB565, transparency: alpha_channel, byte_order: little_endian}
+  - {platform: file, file: "${images_base}nba/hou.png", id: nba_hou, resize: 30x30, type: RGB565, transparency: alpha_channel, byte_order: little_endian}
+  - {platform: file, file: "${images_base}nba/ind.png", id: nba_ind, resize: 30x30, type: RGB565, transparency: alpha_channel, byte_order: little_endian}
+  - {platform: file, file: "${images_base}nba/lac.png", id: nba_lac, resize: 30x30, type: RGB565, transparency: alpha_channel, byte_order: little_endian}
+  - {platform: file, file: "${images_base}nba/lal.png", id: nba_lal, resize: 30x30, type: RGB565, transparency: alpha_channel, byte_order: little_endian}
+  - {platform: file, file: "${images_base}nba/mem.png", id: nba_mem, resize: 30x30, type: RGB565, transparency: alpha_channel, byte_order: little_endian}
+  - {platform: file, file: "${images_base}nba/mia.png", id: nba_mia, resize: 30x30, type: RGB565, transparency: alpha_channel, byte_order: little_endian}
+  - {platform: file, file: "${images_base}nba/mil.png", id: nba_mil, resize: 30x30, type: RGB565, transparency: alpha_channel, byte_order: little_endian}
+  - {platform: file, file: "${images_base}nba/min.png", id: nba_min, resize: 30x30, type: RGB565, transparency: alpha_channel, byte_order: little_endian}
+  - {platform: file, file: "${images_base}nba/no.png", id: nba_no, resize: 30x30, type: RGB565, transparency: alpha_channel, byte_order: little_endian}
+  - {platform: file, file: "${images_base}nba/ny.png", id: nba_ny, resize: 30x30, type: RGB565, transparency: alpha_channel, byte_order: little_endian}
+  - {platform: file, file: "${images_base}nba/okc.png", id: nba_okc, resize: 30x30, type: RGB565, transparency: alpha_channel, byte_order: little_endian}
+  - {platform: file, file: "${images_base}nba/orl.png", id: nba_orl, resize: 30x30, type: RGB565, transparency: alpha_channel, byte_order: little_endian}
+  - {platform: file, file: "${images_base}nba/phi.png", id: nba_phi, resize: 30x30, type: RGB565, transparency: alpha_channel, byte_order: little_endian}
+  - {platform: file, file: "${images_base}nba/phx.png", id: nba_phx, resize: 30x30, type: RGB565, transparency: alpha_channel, byte_order: little_endian}
+  - {platform: file, file: "${images_base}nba/por.png", id: nba_por, resize: 30x30, type: RGB565, transparency: alpha_channel, byte_order: little_endian}
+  - {platform: file, file: "${images_base}nba/sa.png", id: nba_sa, resize: 30x30, type: RGB565, transparency: alpha_channel, byte_order: little_endian}
+  - {platform: file, file: "${images_base}nba/sac.png", id: nba_sac, resize: 30x30, type: RGB565, transparency: alpha_channel, byte_order: little_endian}
+  - {platform: file, file: "${images_base}nba/tor.png", id: nba_tor, resize: 30x30, type: RGB565, transparency: alpha_channel, byte_order: little_endian}
+  - {platform: file, file: "${images_base}nba/utah.png", id: nba_utah, resize: 30x30, type: RGB565, transparency: alpha_channel, byte_order: little_endian}
+  - {platform: file, file: "${images_base}nba/wsh.png", id: nba_wsh, resize: 30x30, type: RGB565, transparency: alpha_channel, byte_order: little_endian}
 
 
 lvgl:
@@ -1161,6 +1193,53 @@ lvgl:
     - lambda: id(p4_video).attach_video_container(id(call_video_surface));
     - script.execute: update_call_tile
     - script.execute: settings_sync_widgets
+    # Gas heater card "current temperature" ring: paint its indicator with a
+    # temperature gradient along the arc (-5..50 degrees over the arc's 270
+    # degree sweep, starting bottom left). The indicator only draws up to the
+    # current value, so 28 degrees shows blue -> green -> orange -> red.
+    # Colours: <=15 blue #51C8F0, 16-21 green #4FDB66, 22-27 orange #F09B51,
+    # >=28 red #F05651, each fading into the next across the band boundary
+    # (T = where each colour stop sits, in degrees).
+    - lambda: |-
+        static const float T[] = {14.0f, 16.0f, 20.0f, 22.0f, 26.0f, 28.0f};
+        static const uint32_t C[] = {0x51C8F0, 0x4FDB66, 0x4FDB66, 0xF09B51, 0xF09B51, 0xF05651};
+        static const float VMIN = -5.0f, VMAX = 50.0f;     // arc min_value / max_value
+        static const float START = 135.0f, SWEEP = 270.0f; // LVGL arc defaults (0 = 3 o'clock, clockwise)
+        static const int SIZE = 240;                       // arc size, no padding: indicator radius 120
+        static lv_image_dsc_t dsc;
+        auto *px = static_cast<uint16_t *>(heap_caps_malloc(SIZE * SIZE * 2, MALLOC_CAP_SPIRAM));
+        if (px == nullptr) {
+          ESP_LOGW("heater", "No PSRAM for the temperature ring gradient; using a solid colour");
+          return;
+        }
+        auto colour_at = [](float v) {
+          if (v <= T[0]) return lv_color_hex(C[0]);
+          for (int i = 0; i < 5; i++) {
+            if (v <= T[i + 1]) {
+              // lv_color_mix(c1, c2, ratio): ratio 255 = all c1, 0 = all c2.
+              const uint8_t mix = (uint8_t) ((v - T[i]) / (T[i + 1] - T[i]) * 255.0f);
+              return lv_color_mix(lv_color_hex(C[i + 1]), lv_color_hex(C[i]), mix);
+            }
+          }
+          return lv_color_hex(C[5]);
+        };
+        for (int y = 0; y < SIZE; y++) {
+          for (int x = 0; x < SIZE; x++) {
+            // Screen y points down, so atan2 gives the clockwise angle LVGL uses.
+            const float a = atan2f(y + 0.5f - SIZE / 2.0f, x + 0.5f - SIZE / 2.0f) * 57.29578f;
+            float rel = fmodf(a - START + 720.0f, 360.0f);
+            if (rel > SWEEP) rel = rel > SWEEP + (360.0f - SWEEP) / 2 ? 0.0f : SWEEP;  // gap: nearest end
+            px[y * SIZE + x] = lv_color_to_u16(colour_at(VMIN + rel / SWEEP * (VMAX - VMIN)));
+          }
+        }
+        dsc.header.magic = LV_IMAGE_HEADER_MAGIC;
+        dsc.header.cf = LV_COLOR_FORMAT_RGB565;
+        dsc.header.w = SIZE;
+        dsc.header.h = SIZE;
+        dsc.header.stride = SIZE * 2;
+        dsc.data_size = SIZE * SIZE * 2;
+        dsc.data = reinterpret_cast<const uint8_t *>(px);
+        lv_obj_set_style_arc_image_src(id(heater_current_arc), &dsc, LV_PART_INDICATOR);
 
   # Warm spotlight centred on the lamp/icon, fading towards the tile edges.
   gradients:
@@ -1511,11 +1590,6 @@ lvgl:
             time: 250ms
 
       widgets:
-        # =====================================================================
-        # TEMPERATURE + HUMIDITY (top left, over the clock card)  col 1 span 4
-        # Icon + value only. cell_style's 6 px padding lines the first icon up
-        # with the card's left edge.
-        # =====================================================================
         - obj: #Temperature and humidity status
             styles: cell_style
             scrollable: false
@@ -1594,9 +1668,6 @@ lvgl:
                   text_font: font_small
                   text_color: 0xAAB8EE
 
-        # =====================================================================
-        # STATUS (top right): ESP32-C6 firmware + Wi-Fi  col 8 span 5 | row 0
-        # update_status_bar refreshes it every 10 s.
         # =====================================================================
         - obj: #Top right status bar
             styles: cell_style
@@ -1756,7 +1827,7 @@ lvgl:
         # =====================================================================
         # 1. DIGITAL CLOCK col 1 span 5 | row 1
         # =====================================================================
-        - obj:
+        - obj: # Digital clock card: time, date, and up to 3 upcoming events (time + title).
             styles: cell_style
             scrollable: false
             grid_cell_column_pos: 1
@@ -1874,14 +1945,7 @@ lvgl:
                   border_width: 0
                   widgets:
                     # ---- frame: left red, right blue, top / bottom red -> blue ----
-                    # LVGL leaves the corner arcs out of a one-sided border
-                    # (border_side LEFT / RIGHT), so each side is a full
-                    # rounded border cropped by a 28 px wide container: red
-                    # on the left, blue on the right, corners included. The
-                    # 2 px strips cover the rest of the top and bottom (card
-                    # about 677x384, radius 14).
-                    # Gradient stops (0-255 of the 649 px strip) put the blend
-                    # at 20-60 % of the card width on top, 40-80 % at the bottom.
+
                     - obj:
                         align: TOP_LEFT
                         width: 28
@@ -1996,7 +2060,7 @@ lvgl:
                               condition:
                                 lambda: |-
                                   return id(heater_power_on).state || id(heater_fan_on).state ||
-                                         id(heater_cool_on) || id(heater_on_at) > 0;
+                                         id(cooler_on).state || id(heater_on_at) > 0;
                               then:
                                 - lambda: |-
                                     id(heater_on_at) = id(heater_off_at) = 0;
@@ -2017,15 +2081,20 @@ lvgl:
                         y: 116
                         width: 240
                         height: 240
-                        min_value: 10
-                        max_value: 35
-                        value: 10
+                        # -5..50 degrees. The indicator is painted with the
+                        # temperature gradient image built in lvgl on_boot,
+                        # which assumes this 240x240 size and zero padding.
+                        min_value: -5
+                        max_value: 50
+                        value: -5
                         clickable: false
+                        pad_all: 0
                         arc_color: 0x29364A
-                        arc_width: 12
+                        arc_width: 7
                         indicator:
-                          arc_color: 0x6A7BFF
-                          arc_width: 12
+                          pad_all: 0
+                          arc_color: 0x51C8F0     # only used if the gradient image is missing
+                          arc_width: 10
                         knob:
                           bg_color: 0xE0E7FF
                           pad_all: 4
@@ -2041,15 +2110,14 @@ lvgl:
                         clickable: false
                         scrollable: false
                         widgets:
-                          - label: {align: CENTER, y: -46, text: "Current", text_font: font_body, text_color: 0x9DB4FF}
                           - label:
                               id: heater_current_label
                               align: CENTER
-                              y: 2
+                              y: -45
                               text: "--°"
                               text_font: font_temp_big
                               text_color: 0xFFFFFF
-                          - label: {align: CENTER, y: 50, text: "\U000F050F", text_font: font_mdi_36, text_color: 0x60A5FA}
+                          - label: {align: CENTER, y: 25, text: "\U000F050F", text_font: font_mdi_36, text_color: 0x60A5FA}
 
                     # ---- right: target pill (- value +) ----
                     # Only while the heater is on (heat or fan mode);
@@ -2291,24 +2359,6 @@ lvgl:
                         x: 14
                         y: 8
                         text: "\U000F07DE"
-                    - label:
-                        styles: title_text
-                        x: 48
-                        y: 6
-                        text: "Cameras"
-                    - label:        # ">" opens the live camera pages
-                        align: TOP_RIGHT
-                        x: -10
-                        y: 0
-                        text: "\U000F0142"
-                        text_font: font_action_icon
-                        text_color: 0xA7B2C4
-                        clickable: true
-                        on_click:
-                          - lvgl.page.show:
-                              id: cam_front_page
-                              animation: MOVE_LEFT
-                              time: 250ms
                     - obj:          # Front Door: last Frigate person snapshot
                         id: cam_front
                         styles: card_style
@@ -2440,11 +2490,6 @@ lvgl:
                         x: 14
                         y: 8
                         text: "\U000F06E8"
-                    - label:
-                        styles: title_text
-                        x: 48
-                        y: 6
-                        text: "Lights"
                     - button: #TV Lamp
                         id: light_tv_lamp_btn
                         styles: light_tile
@@ -2470,15 +2515,6 @@ lvgl:
                               align: CENTER   
                               y: 3
                               clickable: false
-                          - label:
-                              align: BOTTOM_MID
-                              y: -31
-                              width: 76
-                              text: "TV Lamp"
-                              text_align: CENTER
-                              long_mode: WRAP
-                              text_font: font_small
-                              text_color: 0xFFFFFF
                     - button:
                         id: light_living_left_btn
                         styles: light_tile
@@ -2579,11 +2615,7 @@ lvgl:
                         x: 14
                         y: 8
                         text: "\U000F04CE"
-                    - label:
-                        styles: title_text
-                        x: 48
-                        y: 6
-                        text: "Scenes"
+
                     # Four scenes in a 2 x 2 grid: 172 x 96 px, 10 px gaps, aligned with the Lights tiles (y 64-266),
                     # icon on the left and the name beside it.
                     - button:  #Scene Home
@@ -4274,6 +4306,59 @@ lvgl:
               pad_column: 0
             widgets:
               # =====================================================================
+              # CALLER PHOTO (above the Intercom card)       col 1 | row 0
+              # Shown by update_call_tile while a call with a caller_photo_N_name
+              # peer rings or is on; hidden otherwise.
+              # =====================================================================
+              - obj:
+                  styles: cell_style
+                  scrollable: false
+                  grid_cell_column_pos: 1
+                  grid_cell_row_pos: 0
+                  grid_cell_x_align: STRETCH
+                  grid_cell_y_align: STRETCH
+                  widgets:
+                    - obj:
+                        id: caller_photo_card
+                        styles: card_style
+                        width: 100%
+                        height: 100%
+                        hidden: true
+                        scrollable: false
+                        clip_corner: true
+                        widgets:
+                          # 170 px circle, centred: clip_corner clips the
+                          # square photo to the round frame.
+                          - obj:
+                              align: TOP_MID
+                              y: 10
+                              width: 170
+                              height: 170
+                              radius: 85
+                              bg_color: 0x000000
+                              border_color: 0x4A64B8
+                              border_width: 3
+                              pad_all: 0
+                              clip_corner: true
+                              scrollable: false
+                              widgets:
+                                - image:
+                                    id: caller_photo_img
+                                    src: caller_photo_1
+                                    align: CENTER
+                          # Caller name, centred under the photo.
+                          - label:
+                              id: caller_photo_name
+                              align: TOP_MID
+                              y: 186
+                              width: 380
+                              text: ""
+                              text_align: CENTER
+                              text_font: font_title
+                              text_color: 0xFFFFFF
+                              long_mode: DOT
+
+              # =====================================================================
               # 5. INTERCOM                        col 11 span 2 | row 1 span 5
               # =====================================================================
               - obj:
@@ -5569,7 +5654,7 @@ globals:
 
   # Home page NBA strip, from nba_fetch: ({start, end (minutes since
   # 1970-01-01, local time), all day 0/1, first team, second team (index in
-  # nba_draw's NAMES, -1 if not found)}, title), sorted by start.
+  # nba_draw's LOGOS, -1 if not found)}, title), sorted by start.
   - id: nba_games
     type: std::vector<std::pair<std::array<int, 5>, std::string>>
     restore_value: false
@@ -5647,12 +5732,6 @@ globals:
     type: int
     restore_value: false
     initial_value: "1"
-  # Evaporative cooler on, as far as this panel knows (its relay only
-  # toggles it and reports nothing).
-  - id: heater_cool_on
-    type: bool
-    restore_value: false
-    initial_value: "false"
 
 script:
   # Media card: read the selected player's state from HA's REST API
@@ -6420,7 +6499,7 @@ script:
                           return;
                         }
                         // Team names and abbreviations (whole words, case as written) and
-                        // their index in nba_draw's NAMES / LOGOS.
+                        // their index in nba_draw's LOGOS.
                         static const std::pair<const char *, int> KEYS[] = {
                             {"Hawks", 0}, {"Nets", 1}, {"Celtics", 2}, {"Hornets", 3}, {"Bulls", 4},
                             {"Cavaliers", 5}, {"Cavs", 5}, {"Mavericks", 6}, {"Mavs", 6}, {"Nuggets", 7},
@@ -6507,18 +6586,13 @@ script:
                       format: "NBA calendar request failed"
 
   # Fill nba_track with one day's games not over yet (today, or the next day
-  # with games; at most 20): the two teams
-  # (logo, name) stacked on the left, the day and start time on the right,
-  # LIVE while a game is on. Five fit across; with more, the first five are
-  # added again at the end so nba_marquee can loop without a jump.
+  # with games; at most 20), one centred line each: "logo - logo : Today
+  # 09:30", LIVE (red) while a game is on. Five fit across; with more, the
+  # first five are added again at the end so nba_marquee can loop without a
+  # jump.
   - id: nba_draw
     then:
       - lambda: |-
-          static const char *const NAMES[] = {
-              "Hawks", "Nets", "Celtics", "Hornets", "Bulls", "Cavaliers", "Mavericks", "Nuggets",
-              "Pistons", "Warriors", "Rockets", "Pacers", "Clippers", "Lakers", "Grizzlies", "Heat",
-              "Bucks", "Timberwolves", "Pelicans", "Knicks", "Thunder", "Magic", "76ers", "Suns",
-              "Trail Blazers", "Spurs", "Kings", "Raptors", "Jazz", "Wizards"};
           image::Image *const LOGOS[] = {
               id(nba_atl), id(nba_bkn), id(nba_bos), id(nba_cha), id(nba_chi), id(nba_cle), id(nba_dal),
               id(nba_den), id(nba_det), id(nba_gs), id(nba_hou), id(nba_ind), id(nba_lac), id(nba_lal),
@@ -6594,34 +6668,40 @@ script:
           for (int i = 0; i < cells; i++) {
             const auto &t = shown[i % count]->first;
             const int x = i * slot;
-            const int right = x + slot - cells * slot - 10;  // TOP_RIGHT offset: 10 px inside this game's slot
             if (i > 0) {
               lv_obj_t *bar = lv_label_create(track);
               lv_label_set_text(bar, "|");
               lv_obj_set_style_text_color(bar, lv_color_hex(0xAAAAAA), LV_PART_MAIN);
               lv_obj_align(bar, LV_ALIGN_LEFT_MID, x - 2, 0);
             }
-            // Teams: two rows of 24 px, logo then name.
+            // One game: a row centred in its slot.
+            lv_obj_t *cell = lv_obj_create(track);
+            lv_obj_remove_style_all(cell);  // plain box: no theme padding, border or scrolling
+            lv_obj_remove_flag(cell, LV_OBJ_FLAG_CLICKABLE);
+            lv_obj_set_pos(cell, x, 0);
+            lv_obj_set_size(cell, slot, height);
+            lv_obj_set_flex_flow(cell, LV_FLEX_FLOW_ROW);
+            lv_obj_set_flex_align(cell, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+            lv_obj_set_style_pad_column(cell, 6, LV_PART_MAIN);
+            auto text = [cell](const char *s, uint32_t colour) {
+              lv_obj_t *label = lv_label_create(cell);
+              lv_label_set_text(label, s);
+              lv_obj_set_style_text_color(label, lv_color_hex(colour), LV_PART_MAIN);
+              return label;
+            };
             if (t[3] >= 0 && t[4] >= 0) {
-              for (int r = 0; r < 2; r++) {
-                lv_obj_t *logo = lv_image_create(track);
-                lv_image_set_src(logo, LOGOS[t[3 + r]]->get_lv_image_dsc());
-                lv_obj_set_pos(logo, x + 12, r * 24 + 1);
-                lv_obj_t *name = lv_label_create(track);
-                lv_label_set_text(name, NAMES[t[3 + r]]);
-                lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
-                lv_obj_set_width(name, slot - 128);
-                lv_obj_set_pos(name, x + 40, r * 24 + 2);
-              }
+              lv_image_set_src(lv_image_create(cell), LOGOS[t[3]]->get_lv_image_dsc());
+              text("-", 0xAAAAAA);
+              lv_image_set_src(lv_image_create(cell), LOGOS[t[4]]->get_lv_image_dsc());
             } else {
-              lv_obj_t *title = lv_label_create(track);
-              lv_label_set_text(title, shown[i % count]->second.c_str());
+              // Teams not recognised: the calendar title instead of the logos.
+              lv_obj_t *title = text(shown[i % count]->second.c_str(), 0xFFFFFF);
               lv_label_set_long_mode(title, LV_LABEL_LONG_DOT);
-              lv_obj_set_size(title, slot - 100, height);
-              lv_obj_set_pos(title, x + 12, 2);
+              lv_obj_set_width(title, slot / 2);
             }
-            // Right: "Today" / "Tomorrow" / "Sat 8 Nov" over the start time,
-            // or LIVE over it while the game is on.
+            text(":", 0xAAAAAA);
+            // "Today 09:30" / "Tomorrow 09:30" / "Sat 8 Nov 09:30", or LIVE
+            // while the game is on.
             const int day = t[0] / 1440;
             std::string when;
             uint32_t colour = 0x8FA3D0;
@@ -6635,22 +6715,16 @@ script:
             } else {
               int y, m, d;
               civil(day, y, m, d);
-              char text[16];
-              snprintf(text, sizeof(text), "%s %d %s", WEEKDAYS[(day + 3) % 7], d, MONTHS[m - 1]);
-              when = text;
+              char buf[16];
+              snprintf(buf, sizeof(buf), "%s %d %s", WEEKDAYS[(day + 3) % 7], d, MONTHS[m - 1]);
+              when = buf;
             }
-            lv_obj_t *when_label = lv_label_create(track);
-            lv_label_set_text(when_label, when.c_str());
-            lv_obj_set_style_text_color(when_label, lv_color_hex(colour), LV_PART_MAIN);
-            lv_obj_align(when_label, LV_ALIGN_TOP_RIGHT, right, 2);
-            if (!t[2]) {
-              char text[8];
-              snprintf(text, sizeof(text), "%02d:%02d", t[0] % 1440 / 60, t[0] % 60);
-              lv_obj_t *time_label = lv_label_create(track);
-              lv_label_set_text(time_label, text);
-              lv_obj_set_style_text_color(time_label, lv_color_hex(0x8FA3D0), LV_PART_MAIN);
-              lv_obj_align(time_label, LV_ALIGN_TOP_RIGHT, right, 26);
+            if (!t[2] && when != "LIVE") {
+              char buf[8];
+              snprintf(buf, sizeof(buf), " %02d:%02d", t[0] % 1440 / 60, t[0] % 60);
+              when += buf;
             }
+            text(when.c_str(), colour);
           }
 
   # NBA strip with more than five games: slide nba_track along by one game.
@@ -7107,23 +7181,51 @@ script:
             }
           }
 
+          // Caller photo card above: during a call (ringing, calling or on)
+          // with a peer whose name contains caller_photo_N_name.
+          image::Image *photo = nullptr;
+          if (call_state != "idle" && !call_state.empty() && !id(call_ended_active)) {
+            const std::string &peer = id(peer_name);
+            if (peer.find("${caller_photo_1_name}") != std::string::npos)
+              photo = id(caller_photo_1);
+            else if (peer.find("${caller_photo_2_name}") != std::string::npos)
+              photo = id(caller_photo_2);
+          }
+          if (photo != nullptr) {
+            lv_image_set_src(id(caller_photo_img), photo->get_lv_image_dsc());
+            set_label(id(caller_photo_name), id(peer_name).c_str());
+          }
+          set_hidden(id(caller_photo_card), photo == nullptr);
+
   # Page for the call state. A ringing, outgoing or active call shows the
   # Intercom page (unless the video page is already showing the call); once
   # the phone is idle the video page goes back to the Intercom page and any
-  # other page stays as it is.
-  - id: show_phone_page
+  # other page stays as it is. active: true from on_ringing / on_calling /
+  # on_in_call, where the phone state may not read as a call yet. Pages are
+  # changed with lvgl.page.show so ESPHome knows which page is showing
+  # (is_showing(), used by the return-to-home timer).
+  - id: call_page_show
     mode: restart
+    parameters:
+      active: bool
     then:
-      - lambda: |-
-          lv_obj_t *scr = lv_disp_get_scr_act(nullptr);
-          lv_obj_t *intercom = id(intercom_page)->obj;
-          if (!id(phone).is_idle()) {
-            if (scr != intercom && scr != id(call_video_page)->obj)
-              lv_disp_load_scr(intercom);
-          } else if (scr == id(call_video_page)->obj) {
-            lv_disp_load_scr(intercom);
-          }
+      - if:
+          condition:
+            lambda: |-
+              const bool call = active || !id(phone).is_idle();
+              return id(call_video_page)->is_showing() ? !call : (call && !id(intercom_page)->is_showing());
+          then:
+            - lvgl.page.show: intercom_page
       - script.execute: update_call_tile
+      # Again once the phone state has caught up with the event.
+      - delay: 300ms
+      - script.execute: update_call_tile
+
+  # Called without parameters by the intercom packages: the page from the
+  # phone state alone.
+  - id: show_phone_page
+    then:
+      - script.execute: {id: call_page_show, active: false}
 
   # Called by p4_video_renderer on the first remote frame.
   - id: show_video_page
@@ -7214,7 +7316,7 @@ script:
             else                                  label = reason.empty() ? std::string("Ended") : reason;
             return std::string("Reason: ") + label;
       - script.execute: backlight_timer
-      - script.execute: show_phone_page
+      - script.execute: {id: call_page_show, active: false}
       - delay: 4s
       - globals.set:
           id: call_ended_active
@@ -7443,6 +7545,32 @@ script:
       - delay: 250ms
       - switch.turn_off: cooler_relay
 
+  # One press toggles the cooler, so flip its tracked state (cooler_on) too.
+  - id: cooler_toggle
+    then:
+      - script.execute: cooler_press
+      - binary_sensor.template.publish:
+          id: cooler_on
+          state: !lambda 'return !id(cooler_on).state;'
+
+  # Heating and Cooling status under the title: "Cooling on" while the
+  # cooler runs; with Cool selected and the Rinnai off, "Cooling off";
+  # otherwise the Rinnai hvac_action.
+  - id: heater_status_draw
+    then:
+      - lvgl.label.update:
+          id: heater_status_label
+          text: !lambda |-
+            const bool rinnai = id(heater_power_on).state || id(heater_fan_on).state;
+            if (id(cooler_on).state) return std::string("Cooling on");
+            if (id(heater_sched_mode) == 2 && !rinnai) return std::string("Cooling off");
+            const std::string &x = id(heater_action).state;
+            if (x == "heating") return std::string("Heating");
+            if (x == "idle") return std::string("Idle");
+            if (x == "fan") return std::string("Fan only");
+            if (x == "off") return std::string("Off");
+            return x.empty() ? std::string("--") : x;
+
   # Rinnai switch changed (also from Home Assistant or the wall controller):
   # select the mode it runs in, then redraw. The Rinnai on/off switch stays
   # on in fan mode, so fan on = Fan, otherwise power on = Heat.
@@ -7461,7 +7589,7 @@ script:
           if (on && !was_on && id(heater_on_at) > 0) {
             id(heater_on_at) = id(heater_sched_on_type) = 0;
             id(heater_sched_arm)->execute(2);
-          } else if (!on && was_on && !id(heater_cool_on) &&
+          } else if (!on && was_on && !id(cooler_on).state &&
                      (id(heater_off_at) > 0 || id(heater_sched_off_type))) {
             id(heater_off_at) = id(heater_sched_off_type) = 0;
             id(heater_sched_draw)->execute();
@@ -7487,7 +7615,7 @@ script:
             checked: !lambda 'return id(heater_sched_mode) == 3;'
       - lambda: |-
           const bool rinnai = id(heater_power_on).state || id(heater_fan_on).state;
-          const bool on = rinnai || id(heater_cool_on);
+          const bool on = rinnai || id(cooler_on).state;
           lv_obj_t *btn = id(heater_power_btn);
           lv_obj_set_style_border_color(btn, lv_color_hex(on ? 0x8B7CF6 : 0x3A4660), LV_PART_MAIN);
           lv_obj_set_style_shadow_color(btn, lv_color_hex(0x6366F1), LV_PART_MAIN);
@@ -7497,6 +7625,7 @@ script:
           if (rinnai) lv_obj_clear_flag(id(heater_target_pill), LV_OBJ_FLAG_HIDDEN);
           else lv_obj_add_flag(id(heater_target_pill), LV_OBJ_FLAG_HIDDEN);
       - script.execute: heater_draw_target
+      - script.execute: heater_status_draw
 
   # Power button pressed while off: start the selected mode now, or at the
   # Delay on time; with a Delay off timer, turn off at its clock time or that
@@ -7536,7 +7665,7 @@ script:
             return from + s;
           };
           const bool waiting = id(heater_on_at) > 0;
-          const bool running = id(heater_power_on).state || id(heater_fan_on).state || id(heater_cool_on);
+          const bool running = id(heater_power_on).state || id(heater_fan_on).state || id(cooler_on).state;
           if (which == 0)
             id(heater_on_at) = id(heater_sched_on_type)
                 ? when(now.timestamp, id(heater_sched_on_type), id(heater_sched_on_h), id(heater_sched_on_m)) : 0;
@@ -7572,11 +7701,9 @@ script:
       # The cooler button only toggles: press it only if it is off.
       - if:
           condition:
-            lambda: return mode == 2 && !id(heater_cool_on);
+            lambda: return mode == 2 && !id(cooler_on).state;
           then:
-            - lambda: id(heater_cool_on) = true;
-            - script.execute: cooler_press
-            - script.execute: heater_update_buttons
+            - script.execute: cooler_toggle
       - if:
           condition:
             lambda: return mode == 3;
@@ -7587,16 +7714,14 @@ script:
                   entity_id: ${heater_fan_switch}
 
   # Turn off whatever runs: both Rinnai switches, and another press of the
-  # cooler button if this panel turned it on.
+  # cooler button if it is on (cooler_on).
   - id: heater_mode_off
     then:
       - if:
           condition:
-            lambda: return id(heater_cool_on);
+            lambda: return id(cooler_on).state;
           then:
-            - lambda: id(heater_cool_on) = false;
-            - script.execute: cooler_press
-            - script.execute: heater_update_buttons
+            - script.execute: cooler_toggle
       - if:
           condition:
             lambda: return id(heater_power_on).state || id(heater_fan_on).state;
@@ -8029,6 +8154,18 @@ binary_sensor:
     on_state:
       - script.execute: heater_state_changed
 
+  # Evaporative cooler on / off, as far as this panel knows: its relay only
+  # presses the cooler's power button and nothing reports back. Off at boot;
+  # cooler_toggle flips it with each press, and the "Evaporative Cooler Sync
+  # State" button flips it alone when it is out of step.
+  - platform: template
+    id: cooler_on
+    name: Evaporative Cooler
+    icon: mdi:air-conditioner
+    device_class: running
+    on_state:
+      - script.execute: heater_update_buttons
+
 switch:
   # Echo cancellation on/off (esp_aec through esp_audio_stack).
   - platform: esp_audio_stack
@@ -8041,8 +8178,13 @@ switch:
   # Evaporative cooler relay on CN2 pin 2 (GPIO37), wired across the cooler
   # controller's power button (COM + NO). Pressed by the cooler_press script
   # ("Evaporative Cooler Power" button), as in the garage door controller.
-  # inverted: for an active-low relay module, which stays off while UART0 TX
-  # idles high during boot. Remove it only for a high-level-trigger module.
+  # GPIO37 is UART0 TX: from reset until ESPHome sets up this pin (~1-2 s) the
+  # ROM bootloader holds it HIGH. A high-level-trigger relay closes for that
+  # whole time, which the cooler sees as a power-button press on every boot.
+  # So the relay module MUST be active-low (set its trigger jumper to "L" /
+  # LOW): high = off, which keeps it open through boot. inverted: true makes
+  # "on" drive the pin low. Do not flash this with the module still set to
+  # high trigger: the relay would then be closed whenever the switch is off.
   - platform: gpio
     id: cooler_relay
     name: Evaporative Cooler Relay
@@ -8170,13 +8312,24 @@ number:
       - script.execute: backlight_timer
 
 button:
-  # One press of the evaporative cooler's power button (toggles it on/off).
   - platform: template
     name: Evaporative Cooler Power
     id: btn_cooler_power
     icon: mdi:air-conditioner
     on_press:
-      - script.execute: cooler_press
+      - script.execute: cooler_toggle
+
+  # Calibration: flips the tracked cooler state (cooler_on) without
+  # pressing the relay, for when it is out of step with the cooler (e.g.
+  # the panel booted while the cooler was running).
+  - platform: template
+    name: Evaporative Cooler Sync State
+    icon: mdi:sync
+    entity_category: config
+    on_press:
+      - binary_sensor.template.publish:
+          id: cooler_on
+          state: !lambda 'return !id(cooler_on).state;'
 
   # Re-reads the 14-day energy history from HA (also runs on connect and at 00:05).
   - platform: template
@@ -8270,11 +8423,8 @@ sensor:
             args: ['x']
       - lvgl.arc.update:
           id: heater_current_arc
-          value: !lambda 'return (int) roundf(std::min(35.0f, std::max(10.0f, x)));'
-      # Ring colour by temperature: blue below 15°, orange 15-24°, red from 24°.
-      - lambda: |-
-          const uint32_t color = x < 15 ? 0x6A7BFF : x < 24 ? 0xE46F33 : 0xE03E1D;
-          lv_obj_set_style_arc_color(id(heater_current_arc), lv_color_hex(color), LV_PART_INDICATOR);
+          # The indicator's gradient (lvgl on_boot) shows up to this value.
+          value: !lambda 'return (int) roundf(std::min(50.0f, std::max(-5.0f, x)));'
 
   # Gas heater target (climate "temperature" attribute).
   - platform: homeassistant
@@ -8360,21 +8510,15 @@ text_sensor:
     on_value:
       - lambda: id(driveway_full).set_url(x);
 
-  # Gas heater status under the title, from the climate hvac_action.
+  # Gas heater status (climate hvac_action), shown under the card title by
+  # heater_status_draw together with the cooler state.
   - platform: homeassistant
     id: heater_action
     entity_id: ${heater_climate_entity}
     attribute: hvac_action
     internal: true
     on_value:
-      - lvgl.label.update:
-          id: heater_status_label
-          text: !lambda |-
-            if (x == "heating") return std::string("Heating");
-            if (x == "idle") return std::string("Idle");
-            if (x == "fan") return std::string("Fan only");
-            if (x == "off") return std::string("Off");
-            return x;
+      - script.execute: heater_status_draw
 
   # Media card: which media_player to show (an entity id held in HA).
   - platform: homeassistant
