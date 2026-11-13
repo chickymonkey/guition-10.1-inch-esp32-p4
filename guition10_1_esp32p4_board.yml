@@ -238,8 +238,7 @@ esp_ldo:
 # engineering sample; that firmware is not binary compatible with v3.x and
 # crashes at boot. Boot log shows "chip revision: vX.Y" if unsure; for a
 # pre-v3 board use board: esp32-p4-evboard and engineering_sample: true.
-# The sdkconfig option allows interrupts between large video cache-writeback
-# chunks.
+
 esp32:
   board: esp32-p4_r3-evboard
   engineering_sample: false
@@ -248,6 +247,9 @@ esp32:
   framework:
     sdkconfig_options:
       CONFIG_ESP_MM_CACHE_MSYNC_C2M_CHUNKED_OPS: "y"
+      #H264 optimize-experimental, set task core to different core from VoIP
+      CONFIG_ESP_H264_DUAL_TASK: "y"
+      CONFIG_ESP_H264_DUAL_TASK_CORE: "0"
 
     advanced:
       execute_from_psram: true
@@ -273,9 +275,9 @@ external_components:
   - source: ${audio_stack_components_source}
     components: [esp_audio_stack, esp_aec]
   ##RTSP stream
-  - source: github://chickymonkey/Esp-rtsp-stream
+  - source: github://chickymonkey/Esp-rtsp-stream@h264coding
     components: [esp_rtsp_stream]
-    refresh: 1d
+    refresh: 0s
 
 # Live RTSP feeds, only on the two camera pages (the home page shows Frigate
 # snapshots instead). A stream only connects while its canvas is on screen
@@ -285,15 +287,17 @@ esp_rtsp_stream:
   - id: front_door_full
     username: viewer                   # default login when the URL has none
     password: !secret camera_password
+    h264: true
     lvgl_canvas: cam_front_full_canvas
-    max_fps: 10
-    max_frame_size: 262144             # bytes per JPEG frame
+    max_fps: 6
+    max_frame_size:  524288   # 512 KB, 1280x720  #262144             # bytes per JPEG frame
     log_frame_info: true               # fps/decode stats every 30 s
   - id: driveway_full
     username: viewer
     password: !secret camera_password
     lvgl_canvas: cam_driveway_full_canvas
     max_fps: 10
+    h264: false
     max_frame_size: 262144
     log_frame_info: true
 
@@ -2791,7 +2795,11 @@ lvgl:
               - script.execute: {id: cam_switch, to_driveway: true}
             widgets:
               - label: {align: TOP_MID, y: 11, text: "Driveway", text_font: font_body}
-        - obj:              # Front door camera: 640x480 stream
+        # Front door camera: 640x480 H.264B stream, in the same 704x576 box as
+        # the driveway stream (x 168-872, y 150-726). esp_rtsp_stream scales it
+        # to fit while keeping 4:3, so it shows as 704x528, centred with 24 px
+        # black bars above and below.
+        - obj:
             align: CENTER
             x: -120             # 120 px left of centre, making room for the snapshots
             y: 38
@@ -2815,7 +2823,7 @@ lvgl:
         # home page camera tiles: a 20 px name strip on the left (name rotated
         # 90 degrees anticlockwise), a 6 px gap and the 282x282 snapshot.
         - obj:              # Person
-            x: 888
+            x: 908
             y: 150
             width: 308              # 20 px name strip + 6 px gap + 282 px snapshot
             height: 282
@@ -2854,7 +2862,7 @@ lvgl:
                         transform_pivot_x: 50
                         transform_pivot_y: 10
         - obj:              # Cat
-            x: 888
+            x: 908
             y: 444
             width: 308              # 20 px name strip + 6 px gap + 282 px snapshot
             height: 282
@@ -2964,7 +2972,7 @@ lvgl:
                   height: 576
         # Last Frigate snapshots, right of the stream (as on the Front Door page).
         - obj:              # Person
-            x: 888
+            x: 908
             y: 150
             width: 308              # 20 px name strip + 6 px gap + 282 px snapshot
             height: 282
@@ -3003,7 +3011,7 @@ lvgl:
                         transform_pivot_x: 50
                         transform_pivot_y: 10
         - obj:              # Cat
-            x: 888
+            x: 908
             y: 444
             width: 308              # 20 px name strip + 6 px gap + 282 px snapshot
             height: 282
@@ -7536,13 +7544,12 @@ script:
                 id: light_living_right_icon
                 text_color: 0x8995A7
 
-  # Evaporative cooler: one 250 ms press of its power button through the
-  # GPIO37 relay (same pattern as the garage door's press_button script).
+  # Evaporative cooler: one 280 ms press of its power button through the GPIO37 relay.
   - id: cooler_press
     mode: restart
     then:
       - switch.turn_on: cooler_relay
-      - delay: 250ms
+      - delay: 280ms
       - switch.turn_off: cooler_relay
 
   # One press toggles the cooler, so flip its tracked state (cooler_on) too.
@@ -8191,7 +8198,7 @@ switch:
     icon: mdi:air-conditioner
     pin:
       number: ${cooler_relay_pin}
-      inverted: true
+      inverted: false
     restore_mode: ALWAYS_OFF
 
   # VoIP camera (OV02C10): send video on calls. Can be set at any time; while
