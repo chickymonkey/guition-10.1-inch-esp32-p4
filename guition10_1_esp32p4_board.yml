@@ -6,14 +6,15 @@ substitutions:
   name: guition-p4-101
   friendly_name: Guition P4 10.1
 
-  # Pinned to v2026.11.0-dev: upstream main does not build on ESPHome 2026.10 (RingBuffer::handle_ became a
-  # method; n-IA-hane/esphome-audio-stack issue #15). Back to @main once main has the fix.
-  ext_components_source: "github://n-IA-hane/esphome-intercom@v2026.11.0-dev"
-  voip_stack_components_source: "github://n-IA-hane/esphome-voip-stack@v2026.11.0-dev"
-  audio_stack_components_source: "github://n-IA-hane/esphome-audio-stack@v2026.11.0-dev"
+  # Pinned to the stable v2026.11.0 release (same code as v2026.11.0-dev, which first fixed the build
+  # on ESPHome 2026.10: n-IA-hane/esphome-audio-stack issue #15). A fixed tag, not @main, so a clean
+  # build does not pick up newer upstream changes; move all the refs here and in packages together.
+  ext_components_source: "github://n-IA-hane/esphome-intercom@v2026.11.0"
+  voip_stack_components_source: "github://n-IA-hane/esphome-voip-stack@v2026.11.0"
+  audio_stack_components_source: "github://n-IA-hane/esphome-audio-stack@v2026.11.0"
   # ESP-IDF components (esp_driver_ppa, esp_video_csi_compat) are fetched from the intercom repo at this
-  # git ref; the packages default it to "main", which has no esp_video_csi_compat. Keep it on the same tag.
-  intercom_idf_ref: v2026.11.0-dev
+  # git ref; the packages default it to "main". Keep it on the same tag.
+  intercom_idf_ref: v2026.11.0
   assets_base: "https://github.com/n-IA-hane/esphome-intercom/raw/main/"
   images_base: "https://raw.githubusercontent.com/chickymonkey/guition-10.1-inch-esp32-p4/main/images/"
   # Intercom page caller photos. Personal photos, so they are NOT in the
@@ -44,15 +45,12 @@ substitutions:
   # [GUITION] SIP video for packages/voip/p4_video_jpeg.yaml. The OV02C10 runs
   # 1920x1080; the camera only downscales in exact 1/16 steps. 960x540 (1/2)
   # is the size that works: 1200x675 is rejected by the P4 video path
-  # ("input width=1200, height=675 is not supported"), which then falls back
-  # to full 1080p and runs out of buffer memory.
-  #p4_video_width: "960"
-  #p4_video_height: "540"
-  p4_video_width: "1280"
-  p4_video_height: "800"
-  p4_video_fps: "30"
+  # ("input width=1200, height=675 is not supported")
+  p4_video_width: "960"
+  p4_video_height: "540"
+  p4_video_fps: "15"
   p4_camera_rotation: "0"
-  p4_jpeg_quality: "10"
+  p4_jpeg_quality: "9"
   p4_video_max_decode_width: "960"
   p4_video_max_decode_height: "960"
 
@@ -172,27 +170,27 @@ substitutions:
 # Shared packages: P4 base/hosted Wi-Fi, VoIP transport and settings, JPEG
 # video path, audio controls and the ringtone playback components.
 packages:
-  p4_base: github://n-IA-hane/esphome-intercom/packages/platform/esp32p4_base.yaml@v2026.11.0-dev
-  p4_c6_sdio: github://n-IA-hane/esphome-intercom/packages/board/esp32p4_c6_sdio.yaml@v2026.11.0-dev
+  p4_base: github://n-IA-hane/esphome-intercom/packages/platform/esp32p4_base.yaml@v2026.11.0
+  p4_c6_sdio: github://n-IA-hane/esphome-intercom/packages/board/esp32p4_c6_sdio.yaml@v2026.11.0
   # ESP32-C6 co-processor firmware update entity (esp32_c6_coprocessor_update);
   # the status bar shows its installed version.
-  p4_c6_update: github://n-IA-hane/esphome-intercom/packages/board/esp32p4_c6_update.yaml@v2026.11.0-dev
-  p4_diagnostics: github://n-IA-hane/esphome-intercom/packages/diagnostics/native_no_wifi_signal.yaml@v2026.11.0-dev
-  lvgl_p4_ppa: github://n-IA-hane/esphome-intercom/packages/lvgl/p4_ppa.yaml@v2026.11.0-dev
-  voip_transport: github://n-IA-hane/esphome-intercom/packages/voip/transport.yaml@v2026.11.0-dev
-  call_settings: github://n-IA-hane/esphome-intercom/packages/voip/call_settings.yaml@v2026.11.0-dev
-  call_buttons: github://n-IA-hane/esphome-intercom/packages/voip/call_buttons.yaml@v2026.11.0-dev
+  p4_c6_update: github://n-IA-hane/esphome-intercom/packages/board/esp32p4_c6_update.yaml@v2026.11.0
+  p4_diagnostics: github://n-IA-hane/esphome-intercom/packages/diagnostics/native_no_wifi_signal.yaml@v2026.11.0
+  lvgl_p4_ppa: github://n-IA-hane/esphome-intercom/packages/lvgl/p4_ppa.yaml@v2026.11.0
+  voip_transport: github://n-IA-hane/esphome-intercom/packages/voip/transport.yaml@v2026.11.0
+  call_settings: github://n-IA-hane/esphome-intercom/packages/voip/call_settings.yaml@v2026.11.0
+  call_buttons: github://n-IA-hane/esphome-intercom/packages/voip/call_buttons.yaml@v2026.11.0
   # Compile-time JPEG video: camera source, P4 decoder/renderer, Send Video switch.
-  p4_video_jpeg: github://n-IA-hane/esphome-intercom/packages/voip/p4_video_jpeg.yaml@v2026.11.0-dev
+  p4_video_jpeg: github://n-IA-hane/esphome-intercom/packages/voip/p4_video_jpeg.yaml@v2026.11.0
   # Writes the HA media route into p4_call_media_route_label / p4_video_media_route_label.
-  call_media_route: github://n-IA-hane/esphome-intercom/packages/lvgl/p4_call_media_route.yaml@v2026.11.0-dev
-  audio_stack_controls: github://n-IA-hane/esphome-intercom/packages/esp_audio_stack/controls.yaml@v2026.11.0-dev
+  call_media_route: github://n-IA-hane/esphome-intercom/packages/lvgl/p4_call_media_route.yaml@v2026.11.0
+  audio_stack_controls: github://n-IA-hane/esphome-intercom/packages/esp_audio_stack/controls.yaml@v2026.11.0
   # Speaker media player: mixer + speaker_source components and the FLAC
   # (HA's preferred format), MP3 and WAV decoders. The amplifier is switched by
   # the esp_audio_stack amplifier hooks below, not by the speaker_power_output package.
-  playback_compat: github://n-IA-hane/esphome-intercom/packages/media_player/playback_compat.yaml@v2026.11.0-dev
-  http_media_codecs: github://n-IA-hane/esphome-intercom/packages/audio/http_media_codecs.yaml@v2026.11.0-dev
-  flac_codecs_psram: github://n-IA-hane/esphome-intercom/packages/audio/flac_codecs_psram.yaml@v2026.11.0-dev
+  playback_compat: github://n-IA-hane/esphome-intercom/packages/media_player/playback_compat.yaml@v2026.11.0
+  http_media_codecs: github://n-IA-hane/esphome-intercom/packages/audio/http_media_codecs.yaml@v2026.11.0
+  flac_codecs_psram: github://n-IA-hane/esphome-intercom/packages/audio/flac_codecs_psram.yaml@v2026.11.0
 
 # =======BOARD AND MEMORY======================================================
 
@@ -208,20 +206,27 @@ esphome:
     - priority: -100
       then:
         - script.execute: backlight_timer     # sets the saved Screen Brightness
-        # The cooler is assumed off at boot (see cooler_on).
-        - binary_sensor.template.publish:
-            id: cooler_on
-            state: OFF
+        
         - script.execute: home_return_timer
         # Amp off until a call, ring or playback needs it (idle amp = hiss/squeal).
         - output.turn_off: speaker_enable
-        # Start at 70 % master volume on every boot (the number would otherwise
+        # Start at 75 % master volume on every boot (the number would otherwise
         # restore the last saved level, 100 % by default).
         - number.set:
             id: master_volume
-            value: 70
+            value: 75
+        # Every reset holds the cooler relay closed for ~1-2 s (see
+        # cooler_relay), which the cooler takes as one power-button press.
+        # A second press here cancels it, so a reboot leaves the cooler as
+        # it was: restore the last tracked state. After a power cut the
+        # cooler is assumed to have lost power too, so off.
+        - delay: 5s
+        - script.execute: cooler_press
+        - binary_sensor.template.publish:
+            id: cooler_on
+            state: !lambda 'return esp_reset_reason() != ESP_RST_POWERON && id(cooler_on_saved);'
         # Light tiles once HA has had time to send the light states.
-        - delay: 8s
+        - delay: 2s
         - script.execute: light_tiles_check
 
 psram:
@@ -289,8 +294,8 @@ esp_rtsp_stream:
     password: !secret camera_password
     h264: true
     lvgl_canvas: cam_front_full_canvas
-    max_fps: 6
-    max_frame_size:  524288   # 512 KB, 1280x720  #262144             # bytes per JPEG frame
+    max_fps: 10
+    max_frame_size:  262144   # 512 KB, 1280x720  #262144             # bytes per JPEG frame
     log_frame_info: true               # fps/decode stats every 30 s
   - id: driveway_full
     username: viewer
@@ -5540,6 +5545,12 @@ globals:
     restore_value: no
     initial_value: '""'
 
+  # Last tracked cooler state (cooler_on), restored after a reboot.
+  - id: cooler_on_saved
+    type: bool
+    restore_value: yes
+    initial_value: 'false'
+
   # call_ended_group is shown for ~4 s after a call terminates (hangup,
   # decline, error, timeout); update_call_tile checks this flag.
   - id: call_ended_active
@@ -7386,9 +7397,7 @@ script:
       - lvgl.slider.update:
           id: ui_speaker_vol_slider
           value: !lambda 'return id(master_volume).state;'
-#      - lvgl.slider.update:
-#          id: ui_mic_vol_slider
-#          value: !lambda 'return id(mic_gain).state;'
+
       - lvgl.switch.update:
           id: ui_speaker_mute_sw
           state:
@@ -7410,25 +7419,6 @@ script:
       - lvgl.dropdown.update:
           id: ui_home_return_dd
           selected_index: !lambda 'return id(home_return_select).active_index().value_or(2);'
-#      - lvgl.switch.update:
-#          id: ui_dnd_sw
-#          state:
-#            checked: !lambda 'return id(dnd_switch).state;'
-#      - lvgl.switch.update:
-#          id: ui_aec_sw
-#          state:
-#            checked: !lambda 'return id(aec_switch).state;'
-#      - lvgl.dropdown.update:
-#          id: ui_aec_mode_dd
-#          selected_text: !lambda 'return id(aec_mode_select).current_option();'
-#      - lvgl.switch.update:
-#          id: ui_ns_sw
-#          state:
-#            checked: !lambda 'return id(ns_switch).state;'
-#      - lvgl.switch.update:
-#          id: ui_agc_sw
-#          state:
-#            checked: !lambda 'return id(agc_switch).state;'
 
   - id: update_settings_info
     then:
@@ -8162,15 +8152,18 @@ binary_sensor:
       - script.execute: heater_state_changed
 
   # Evaporative cooler on / off, as far as this panel knows: its relay only
-  # presses the cooler's power button and nothing reports back. Off at boot;
-  # cooler_toggle flips it with each press, and the "Evaporative Cooler Sync
-  # State" button flips it alone when it is out of step.
+  # presses the cooler's power button and nothing reports back. Restored at
+  # boot (on_boot); cooler_toggle flips it with each press, and the
+  # "Evaporative Cooler Sync State" button flips it alone when it is out of step.
   - platform: template
     id: cooler_on
     name: Evaporative Cooler
     icon: mdi:air-conditioner
     device_class: running
     on_state:
+      - globals.set:
+          id: cooler_on_saved
+          value: !lambda 'return x;'
       - script.execute: heater_update_buttons
 
 switch:
@@ -8188,10 +8181,8 @@ switch:
   # GPIO37 is UART0 TX: from reset until ESPHome sets up this pin (~1-2 s) the
   # ROM bootloader holds it HIGH. A high-level-trigger relay closes for that
   # whole time, which the cooler sees as a power-button press on every boot.
-  # So the relay module MUST be active-low (set its trigger jumper to "L" /
-  # LOW): high = off, which keeps it open through boot. inverted: true makes
-  # "on" drive the pin low. Do not flash this with the module still set to
-  # high trigger: the relay would then be closed whenever the switch is off.
+  # This 3.3 V module is high-trigger only (no H/L jumper), so on_boot
+  # presses the button once more ~5 s later to cancel that press.
   - platform: gpio
     id: cooler_relay
     name: Evaporative Cooler Relay
@@ -8670,7 +8661,7 @@ interval:
           then:
             - script.execute: nba_marquee
 
-  - interval: 1s
+  - interval: 2s
     then:
       # Media card: the player state is read from HA when the page opens and
       # after a button press (media_poll); in between, the progress bar is
