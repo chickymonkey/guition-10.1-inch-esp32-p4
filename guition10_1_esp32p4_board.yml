@@ -46,11 +46,14 @@ substitutions:
   # 1920x1080; the camera only downscales in exact 1/16 steps. 960x540 (1/2)
   # is the size that works: 1200x675 is rejected by the P4 video path
   # ("input width=1200, height=675 is not supported")
-  p4_video_width: "960"
-  p4_video_height: "540"
+  # The sensor now runs its 1288x728 centre-crop mode (ov02c10 mode below) to
+  # save ~4.6 MB of PSRAM; 966x546 is its exact 12/16 PPA downscale. With the
+  # 1920x1080 mode, go back to 960x540.
+  p4_video_width: "966"
+  p4_video_height: "546"
   p4_video_fps: "15"
   p4_camera_rotation: "0"
-  p4_jpeg_quality: "9"
+  p4_jpeg_quality: "8"
   p4_video_max_decode_width: "960"
   p4_video_max_decode_height: "960"
 
@@ -175,7 +178,10 @@ packages:
   # ESP32-C6 co-processor firmware update entity (esp32_c6_coprocessor_update);
   # the status bar shows its installed version.
   p4_c6_update: github://n-IA-hane/esphome-intercom/packages/board/esp32p4_c6_update.yaml@v2026.11.0
-  p4_diagnostics: github://n-IA-hane/esphome-intercom/packages/diagnostics/native_no_wifi_signal.yaml@v2026.11.0
+  # The p4_diagnostics package (diagnostics/native_no_wifi_signal.yaml) is
+  # copied into this file instead (debug: and the diagnostic sensors below), so
+  # the memory sensors can report KB rather than bytes: its sensors have no
+  # ids, so a package entry can't be changed from here.
   lvgl_p4_ppa: github://n-IA-hane/esphome-intercom/packages/lvgl/p4_ppa.yaml@v2026.11.0
   voip_transport: github://n-IA-hane/esphome-intercom/packages/voip/transport.yaml@v2026.11.0
   call_settings: github://n-IA-hane/esphome-intercom/packages/voip/call_settings.yaml@v2026.11.0
@@ -486,10 +492,14 @@ i2c:
     frequency: 400kHz
     scan: true                     # DEBUG: boot log lists 0x18 codec, 0x32 RTC, 0x36 camera, 0x40 touch
 
-# [GUITION] OV02C10 on the 15-pin CSI connector: 1-lane 1920x1080 RAW10 mode,
-# no XCLK/reset/power-down lines.
+# [GUITION] OV02C10 on the 15-pin CSI connector: 1-lane RAW10 (1288x728 crop,
+# see mode), no XCLK/reset/power-down lines.
 ov02c10:
   lanes: 1
+  # Centre crop (~2/3 of the full view, no binning). The camera keeps two
+  # capture frames in PSRAM for good once started: ~3.7 MB at 1288x728
+  # against ~8.3 MB at 1920x1080. Remove for the full 1080p view.
+  mode: 1288x728
   horizontal_mirror: true     # sensor mirror (0x3820 bit 3); set false if it now looks mirrored
 
 esp_video_camera:
@@ -1203,16 +1213,18 @@ lvgl:
     - script.execute: update_call_tile
     - script.execute: settings_sync_widgets
     # Gas heater card "current temperature" ring: paint its indicator with a
-    # temperature gradient along the arc (-5..50 degrees over the arc's 270
+    # temperature gradient along the arc (0..40 degrees over the arc's 270
     # degree sweep, starting bottom left). The indicator only draws up to the
-    # current value, so 28 degrees shows blue -> green -> orange -> red.
-    # Colours: <=15 blue #51C8F0, 16-21 green #4FDB66, 22-27 orange #F09B51,
-    # >=28 red #F05651, each fading into the next across the band boundary
+    # current value, so 30 degrees shows every colour up to red.
+    # Colours: 0-8 dark blue #2B69F0, 8-14 light blue #51C8F0, 15-21 green
+    # #4FDB66, 21-27 orange #F09B51, >=27 red #F05651. Each fades into the
+    # next over a 3 degree blend centred on the boundary (8, 15, 21, 27)
     # (T = where each colour stop sits, in degrees).
     - lambda: |-
-        static const float T[] = {14.0f, 16.0f, 20.0f, 22.0f, 26.0f, 28.0f};
-        static const uint32_t C[] = {0x51C8F0, 0x4FDB66, 0x4FDB66, 0xF09B51, 0xF09B51, 0xF05651};
-        static const float VMIN = -5.0f, VMAX = 50.0f;     // arc min_value / max_value
+        static const float T[] = {6.5f, 9.5f, 13.5f, 16.5f, 19.5f, 22.5f, 25.5f, 28.5f};
+        static const uint32_t C[] = {0x2B69F0, 0x51C8F0, 0x51C8F0, 0x4FDB66, 0x4FDB66, 0xF09B51, 0xF09B51, 0xF05651};
+        static const int N = sizeof(T) / sizeof(T[0]);
+        static const float VMIN = 0.0f, VMAX = 40.0f;      // arc min_value / max_value
         static const float START = 135.0f, SWEEP = 270.0f; // LVGL arc defaults (0 = 3 o'clock, clockwise)
         static const int SIZE = 240;                       // arc size, no padding: indicator radius 120
         static lv_image_dsc_t dsc;
@@ -1223,14 +1235,14 @@ lvgl:
         }
         auto colour_at = [](float v) {
           if (v <= T[0]) return lv_color_hex(C[0]);
-          for (int i = 0; i < 5; i++) {
+          for (int i = 0; i < N - 1; i++) {
             if (v <= T[i + 1]) {
               // lv_color_mix(c1, c2, ratio): ratio 255 = all c1, 0 = all c2.
               const uint8_t mix = (uint8_t) ((v - T[i]) / (T[i + 1] - T[i]) * 255.0f);
               return lv_color_mix(lv_color_hex(C[i + 1]), lv_color_hex(C[i]), mix);
             }
           }
-          return lv_color_hex(C[5]);
+          return lv_color_hex(C[N - 1]);
         };
         for (int y = 0; y < SIZE; y++) {
           for (int x = 0; x < SIZE; x++) {
@@ -2064,6 +2076,43 @@ lvgl:
                         bg_color: 0x141B2B
                         border_color: 0x3A4660
                         border_width: 3
+                        # Press effect: scale about the centre (64 / 2).
+                        transform_pivot_x: 32
+                        transform_pivot_y: 32
+                        # Pressed: shrink to 97 % (scale 248 of 256) in 80 ms.
+                        on_press:
+                          - lambda: |-
+                              lv_obj_t *btn = id(heater_power_btn);
+                              lv_anim_del(btn, nullptr);
+                              lv_anim_t a;
+                              lv_anim_init(&a);
+                              lv_anim_set_var(&a, btn);
+                              lv_anim_set_values(&a, lv_obj_get_style_transform_scale_x(btn, LV_PART_MAIN), 248);
+                              lv_anim_set_duration(&a, 80);
+                              lv_anim_set_path_cb(&a, lv_anim_path_ease_out);
+                              lv_anim_set_exec_cb(&a, [](void *obj, int32_t s) {
+                                lv_obj_set_style_transform_scale((lv_obj_t *) obj, s, LV_PART_MAIN);
+                              });
+                              lv_anim_start(&a);
+                        # Released (or finger slid off): spring back to 100 %
+                        # with a small damped bounce past it, over 350 ms.
+                        on_release:
+                          - lambda: |-
+                              static int32_t from;
+                              lv_obj_t *btn = id(heater_power_btn);
+                              lv_anim_del(btn, nullptr);
+                              from = lv_obj_get_style_transform_scale_x(btn, LV_PART_MAIN);
+                              lv_anim_t a;
+                              lv_anim_init(&a);
+                              lv_anim_set_var(&a, btn);
+                              lv_anim_set_values(&a, 0, 1000);
+                              lv_anim_set_duration(&a, 350);
+                              lv_anim_set_exec_cb(&a, [](void *obj, int32_t v) {
+                                const float p = v / 1000.0f;
+                                const float s = 256.0f - (256 - from) * expf(-4.0f * p) * cosf(3.0f * 3.14159f * p);
+                                lv_obj_set_style_transform_scale((lv_obj_t *) obj, (int32_t) roundf(s), LV_PART_MAIN);
+                              });
+                              lv_anim_start(&a);
                         on_click:
                           - if:
                               condition:
@@ -2082,7 +2131,7 @@ lvgl:
                           - label: {align: CENTER, text: "\U000F0425", text_font: font_mdi_36, text_color: 0xFFFFFF}
 
                     # ---- left: current temperature ring (living room) ----
-                    # Arc range 10-35 degrees; not touchable (clickable: false)
+                    # Arc range 0-40 degrees; not touchable (clickable: false)
                     # but keeps its knob as the end-of-arc dot.
                     - arc:
                         id: heater_current_arc
@@ -2090,20 +2139,21 @@ lvgl:
                         y: 116
                         width: 240
                         height: 240
-                        # -5..50 degrees. The indicator is painted with the
+                        # 0..40 degrees. The indicator is painted with the
                         # temperature gradient image built in lvgl on_boot,
-                        # which assumes this 240x240 size and zero padding.
-                        min_value: -5
-                        max_value: 50
-                        value: -5
+                        # which assumes this 240x240 size, zero padding and
+                        # the same VMIN / VMAX.
+                        min_value: 0
+                        max_value: 40
+                        value: 0
                         clickable: false
                         pad_all: 0
                         arc_color: 0x29364A
-                        arc_width: 7
+                        arc_width: 10
                         indicator:
                           pad_all: 0
                           arc_color: 0x51C8F0     # only used if the gradient image is missing
-                          arc_width: 10
+                          arc_width: 13
                         knob:
                           bg_color: 0xE0E7FF
                           pad_all: 4
@@ -7614,8 +7664,16 @@ script:
           const bool rinnai = id(heater_power_on).state || id(heater_fan_on).state;
           const bool on = rinnai || id(cooler_on).state;
           lv_obj_t *btn = id(heater_power_btn);
+          // Fill and glow by what runs: fan green, heat red, cooler light blue.
+          // Fan first: the Rinnai on/off switch stays on in fan mode too, so
+          // only the circulation fan switch tells fan from heat (as in
+          // heater_state_changed).
+          const uint32_t mode_colour = id(heater_fan_on).state   ? 0x4FDB66
+                                     : id(heater_power_on).state ? 0xF05651
+                                                                 : 0x51C8F0;
+          lv_obj_set_style_bg_color(btn, lv_color_hex(on ? mode_colour : 0x141B2B), LV_PART_MAIN);
           lv_obj_set_style_border_color(btn, lv_color_hex(on ? 0x8B7CF6 : 0x3A4660), LV_PART_MAIN);
-          lv_obj_set_style_shadow_color(btn, lv_color_hex(0x6366F1), LV_PART_MAIN);
+          lv_obj_set_style_shadow_color(btn, lv_color_hex(mode_colour), LV_PART_MAIN);
           lv_obj_set_style_shadow_width(btn, on ? 18 : 0, LV_PART_MAIN);
           lv_obj_set_style_shadow_opa(btn, LV_OPA_50, LV_PART_MAIN);
           // Target / fan speed only mean something while the heater is on.
@@ -8064,7 +8122,18 @@ script:
                       time: 250ms
                   - script.execute: update_call_tile
 
+# Native debug component behind the diagnostic sensors (heap, PSRAM, loop
+# time, reset reason, device info).
+debug:
+  update_interval: 60s
+
 binary_sensor:
+  # API connection status (from the native_no_wifi_signal package).
+  - platform: status
+    id: node_status
+    name: Status
+    entity_category: diagnostic
+
   - platform: gpio
     name: Boot Button
     id: boot_button
@@ -8358,6 +8427,57 @@ sensor:
       then:
         - script.execute: update_status_bar
 
+  # Diagnostics, as in the intercom repo's diagnostics/native_no_wifi_signal
+  # package, but memory in KB (1 KB = 1024 bytes) instead of bytes.
+  - platform: uptime
+    name: Uptime
+    update_interval: 60s
+    entity_category: diagnostic
+
+  - platform: internal_temperature
+    name: CPU Temperature
+    update_interval: 60s
+    entity_category: diagnostic
+
+  - platform: debug
+    free:
+      name: Free Heap
+      entity_category: diagnostic
+      unit_of_measurement: KB
+      accuracy_decimals: 0
+      filters:
+        - multiply: 0.0009765625
+    block:
+      name: Largest Free Block
+      entity_category: diagnostic
+      unit_of_measurement: KB
+      accuracy_decimals: 0
+      filters:
+        - multiply: 0.0009765625
+    min_free:
+      name: Minimum Free Heap
+      entity_category: diagnostic
+      unit_of_measurement: KB
+      accuracy_decimals: 0
+      filters:
+        - multiply: 0.0009765625
+    fragmentation:
+      name: Heap Fragmentation
+      entity_category: diagnostic
+    loop_time:
+      name: Main Loop Max Time
+      entity_category: diagnostic
+    psram:
+      name: PSRAM Free
+      entity_category: diagnostic
+      unit_of_measurement: KB
+      accuracy_decimals: 0
+      filters:
+        - multiply: 0.0009765625
+    cpu_frequency:
+      name: CPU Frequency
+      entity_category: diagnostic
+
   - platform: homeassistant
     id: garage_position
     entity_id: ${garage_position_entity}
@@ -8422,7 +8542,7 @@ sensor:
       - lvgl.arc.update:
           id: heater_current_arc
           # The indicator's gradient (lvgl on_boot) shows up to this value.
-          value: !lambda 'return (int) roundf(std::min(50.0f, std::max(-5.0f, x)));'
+          value: !lambda 'return (int) roundf(std::min(40.0f, std::max(0.0f, x)));'
 
   # Gas heater target (climate "temperature" attribute).
   - platform: homeassistant
@@ -8483,6 +8603,15 @@ sensor:
             args: ['x * ${soil_moisture_scale}']
 
 text_sensor:
+  # Diagnostics (from the native_no_wifi_signal package, see sensor:).
+  - platform: debug
+    device:
+      name: Device Info
+      entity_category: diagnostic
+    reset_reason:
+      name: Reset Reason
+      entity_category: diagnostic
+
   # Uptime ("3d 4h 12m 5s"), also shown bottom right on the Settings page.
   - platform: uptime
     name: "Uptime"
